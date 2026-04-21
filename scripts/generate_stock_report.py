@@ -186,7 +186,7 @@ def parse_financial_metrics(text: str) -> dict[str, str]:
     }
 
     def find_7digit_ints(sub: str) -> list[str]:
-        return re.findall(r'\d{1,3}(?:,\d{3}){2}', sub)
+        return re.findall(r'\d{1,3}(?:,\d{3}){1,2}', sub)
 
     idx_assets = raw.find('13,898,471')
     if idx_assets != -1:
