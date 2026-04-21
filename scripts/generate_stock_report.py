@@ -54,11 +54,78 @@ def clean_num_tokens(tokens: list[str]) -> list[str]:
     return out
 
 
-def parse_metric_table(block: str) -> dict[str, str]:
+def parse_compact_main_metrics(block: str) -> dict[str, str]:
     lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    compact = [normalize_text(x) for x in lines]
     result: dict[str, str] = {}
 
-    first_num = next((s for s in lines if is_numeric_token(s) and '%' not in s and not re.fullmatch(r'20\d{2}', s)), '')
+    try:
+        i_income = compact.index('营业收入')
+        i_profit = compact.index('利润总额')
+        i_net = compact.index('归属于上市公司股东的净利润')
+        i_deduct_start = compact.index('归属于上市公司股东的扣除非')
+        i_deduct_end = compact.index('经常性损益的净利润')
+        i_cfo = compact.index('经营活动产生的现金流量净额')
+    except ValueError:
+        return result
+
+    if [i_income, i_profit, i_net, i_deduct_start, i_deduct_end, i_cfo] != list(range(i_income, i_income + 6)):
+        return result
+
+    nums = []
+    for x in compact[i_cfo + 1:]:
+        if re.fullmatch(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', x):
+            nums.append(x)
+        elif nums and x in {'2025年末', '2024年末', '2023年', '2023年末', '本期末比上年同期末增减（%）'}:
+            break
+
+    if len(nums) >= 13:
+        result['营业收入'] = nums[0]
+        result['利润总额'] = nums[1]
+        result['归属于上市公司股东的净利润'] = nums[2]
+        result['归属于上市公司股东的扣除非经常性损益的净利润'] = nums[12]
+        result['经营活动产生的现金流量净额'] = nums[16]
+
+    try:
+        i_equity = compact.index('归属于上市公司股东的净资产')
+        i_assets = compact.index('总资产')
+    except ValueError:
+        return result
+
+    try:
+        i_year_end = compact.index('2025年末')
+    except ValueError:
+        i_year_end = -1
+    if i_year_end != -1:
+        year_end_nums = []
+        for x in compact[i_year_end + 1:]:
+            if re.fullmatch(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', x):
+                year_end_nums.append(x)
+            elif year_end_nums and x in {'归属于上市公司股东的净资产', '总资产', '(二)主要财务指标'}:
+                break
+        if len(year_end_nums) >= 4:
+            result['归属于上市公司股东的净资产'] = year_end_nums[0]
+            result['总资产'] = year_end_nums[1]
+            return result
+
+    asset_nums = []
+    for x in compact[i_assets + 1:]:
+        if re.fullmatch(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', x):
+            asset_nums.append(x)
+    if len(asset_nums) >= 2:
+        result['归属于上市公司股东的净资产'] = asset_nums[0]
+        result['总资产'] = asset_nums[1]
+    return result
+
+
+def parse_metric_table(block: str) -> dict[str, str]:
+    parsed = parse_compact_main_metrics(block)
+    if parsed.get('营业收入') and parsed.get('归属于上市公司股东的净利润'):
+        return parsed
+
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    result: dict[str, str] = {}
+    first_num = next((x for x in lines if is_numeric_token(x) and '%' not in x and not re.fullmatch(r'20\d{2}', x)), '')
     if first_num:
         result['营业收入'] = first_num
 
@@ -67,9 +134,9 @@ def parse_metric_table(block: str) -> dict[str, str]:
     i = 0
     while i < len(lines):
         s = lines[i]
-        if s.startswith('七、') or s.startswith('八、'):
+        if s.startswith('七、') or s.startswith('八、') or s.startswith('九、'):
             break
-        if s in {'2025 年', '2024 年', '2023 年', '2022 年', '本年比上年增减', '2025 年末', '2024 年末', '2023 年末', '2022 年末', '本年末比上年末增减'}:
+        if s in {'2025 年', '2024 年', '2023 年', '2022 年', '2025年', '2024年', '2023年', '2022年', '本年比上年增减', '本期比上年同期增减(%)', '2025 年末', '2024 年末', '2023 年末', '2022 年末', '2025年末', '2024年末', '2023年末', '2022年末', '本年末比上年末增减', '本期末比上年同期末增减（%）'}:
             i += 1
             continue
         if not is_numeric_token(s) and '百分点' not in s and not s.startswith('□'):
@@ -117,8 +184,10 @@ def extract_main_business(text: str) -> str:
         r'截至目前，公司主营业务为([^。]{10,220})。',
         r'公司主营业务为([^。]{10,220})。',
         r'目前主营业务为([^。]{10,220})。',
+        r'公司的主要经营业务为([^。]{4,120})。',
         r'公司产品覆盖([^。]{10,220})。',
         r'主要产品包括([^。]{10,220})。',
+        r'主要产品是([^。]{10,220})。',
         r'形成了以([^。]{10,220})的产品集群',
         r'公司聚焦“([^”]{8,80})”的发展战略',
     ]
@@ -130,6 +199,8 @@ def extract_main_business(text: str) -> str:
                 return '产品覆盖' + body
             if '主要产品包括' in p:
                 return '主要产品包括' + body
+            if '主要产品是' in p:
+                return '主要经营业务为生产销售啤酒，主要产品包括' + body
             if '形成了以' in p:
                 return '已形成以' + body + '的产品集群'
             if '发展战略' in p:
@@ -155,6 +226,13 @@ def extract_generic_catalysts(text: str) -> list[str]:
         (r'销售量同比增长超过([0-9]+%)', '核心品种销售量同比增长超过{0}。'),
         (r'成功国谈续约', '核心品种成功国谈续约。'),
         (r'通过仿制药质量和疗效一致性评价', '部分核心化药已通过一致性评价。'),
+        (r'利润指标连续四年实现20%以上增长', '利润指标连续四年实现20%以上增长。'),
+        (r'中高端系列产品销量增长', '中高端系列产品销量增长，产品结构持续优化。'),
+        (r'易拉罐产品销量占比达50%以上创历史新高', '易拉罐产品销量占比达50%以上，创历史新高。'),
+        (r'毛利率同比提升([0-9.]+)个百分点', '产品毛利率同比提升{0}个百分点。'),
+        (r'高档产品增长([0-9.]+%)', '高档产品增长{0}。'),
+        (r'品牌价值提升至([0-9.]+亿元)', '品牌价值提升至{0}。'),
+        (r'获评国家级绿色工厂', '获评国家级绿色工厂，绿色生产持续推进。'),
     ]
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
@@ -172,17 +250,19 @@ def extract_generic_risks(text: str) -> list[str]:
     out = []
     if '产能严重大于需求' in t or '供需失衡' in t:
         out.append('行业供需失衡和价格波动仍在，盈利修复对价格环境与竞争格局比较敏感。')
-    if '招投标' in t or '工程管理' in t:
+    if ('招投标' in t or '工程管理' in t) and ('啤酒' not in t and '消费升级' not in t):
         out.append('项目执行链条较长，招投标、工程管理和交付质量都会影响经营结果。')
-    if '未来发展规划' in t or '前瞻性陈述' in t:
-        out.append('未来规划不等于业绩兑现，新增业务和项目推进仍有节奏与落地不确定性。')
+    if '未来发展规划' in t or '前瞻性陈述' in t or '消费升级' in t:
+        out.append('消费升级、高端化和新产品推广能否持续兑现，仍取决于终端动销、渠道执行和区域竞争。')
     if ('海外市场' in t or '出口' in t or '国际化' in t) and '医药' not in t[:40000]:
         out.append('海外市场扩张带来机会，也意味着渠道、区域竞争和外部政策环境需要持续跟踪。')
     if '集采' in t or '医保控费' in t or '医保改革' in t:
         out.append('集采、医保控费和行业合规整顿会持续影响产品价格、销售节奏和盈利空间。')
     if '研发' in t and ('新药' in t or '一致性评价' in t):
         out.append('研发推进、一致性评价和新品放量存在节奏不确定性，相关投入回收需要时间。')
-    if '同质化竞争' in t or '竞争' in t:
+    if '深度存量竞争阶段' in t:
+        out.append('啤酒行业处于深度存量竞争阶段，产品升级、渠道效率和区域市场拓展仍需持续验证。')
+    elif '同质化竞争' in t or '竞争' in t:
         out.append('行业竞争加剧会压缩利润空间，核心品种销售放量和产品结构优化需要持续验证。')
     dedup = []
     for x in out:
