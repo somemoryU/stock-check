@@ -6,35 +6,44 @@ import re
 from pathlib import Path
 
 
-def extract_number(text: str, label: str) -> str:
-    patterns = [
-        label + r"[：:]?\s*([0-9,]+(?:\.[0-9]+)?)",
-        label + r"[^0-9\n]{0,20}([0-9,]+(?:\.[0-9]+)?)",
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text)
-        if m:
-            return m.group(1)
-    return ""
-
-
-def extract_metric_from_summary(text: str, label: str) -> str:
-    windows = []
-    anchors = [
+def extract_annual_metrics_block(text: str) -> str:
+    start_markers = [
+        '六、主要会计数据和财务指标',
         '主要会计数据和财务指标',
-        '主要财务指标',
-        '会计数据和财务指标',
-        '主要会计数据',
     ]
-    for anchor in anchors:
-        idx = text.find(anchor)
-        if idx != -1:
-            windows.append(text[idx: idx + 5000])
-    windows.append(text[:8000])
-    for win in windows:
-        v = extract_number(win, label)
-        if v:
-            return v
+    end_markers = [
+        '八、分季度主要财务指标',
+        '分季度主要财务指标',
+        '九、非经常性损益项目及金额',
+    ]
+    start = -1
+    for m in start_markers:
+        start = text.find(m)
+        if start != -1:
+            break
+    if start == -1:
+        return text[:8000]
+    end = -1
+    for m in end_markers:
+        pos = text.find(m, start)
+        if pos != -1:
+            end = pos
+            break
+    if end == -1:
+        end = min(len(text), start + 5000)
+    return text[start:end]
+
+
+def extract_first_number_after(label: str, block: str) -> str:
+    idx = block.find(label)
+    if idx == -1:
+        return ""
+    tail = block[idx: idx + 300]
+    nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?%?', tail)
+    for n in nums[1:]:
+        if '%' in n:
+            continue
+        return n
     return ""
 
 
@@ -78,13 +87,16 @@ def main() -> None:
     meta = json.loads(Path(args.meta).read_text(encoding="utf-8"))
     selected = json.loads(Path(args.selected).read_text(encoding="utf-8"))
     text = txt_path.read_text(encoding="utf-8", errors="ignore")
+    annual_block = extract_annual_metrics_block(text)
 
-    revenue = extract_metric_from_summary(text, "营业收入")
-    profit = extract_metric_from_summary(text, "归属于上市公司股东的净利润")
-    ex_profit = extract_metric_from_summary(text, "归属于上市公司股东的扣除非经常性损益的净利润")
-    cfo = extract_metric_from_summary(text, "经营活动产生的现金流量净额")
-    assets = extract_metric_from_summary(text, "总资产")
-    equity = extract_metric_from_summary(text, "归属于上市公司股东的净资产")
+    revenue = extract_first_number_after("营业收入", annual_block)
+    profit = extract_first_number_after("归属于上市公司股东的净利润", annual_block)
+    ex_profit = extract_first_number_after("归属于上市公司股东的扣除非经常性损益的净利润", annual_block)
+    if not ex_profit:
+        ex_profit = extract_first_number_after("归属于上市公司股东的扣除非经常性损\n益的净利润", annual_block)
+    cfo = extract_first_number_after("经营活动产生的现金流量净额", annual_block)
+    assets = extract_first_number_after("总资产", annual_block)
+    equity = extract_first_number_after("归属于上市公司股东的净资产", annual_block)
     main_business = extract_main_business(text)
 
     catalysts = pick_lines(text, ["风电", "光伏", "储能", "海上风电", "虚拟电厂", "售电", "碳资产", "分布式"], 10)
