@@ -22,7 +22,7 @@ def extract_annual_metrics_block(text: str) -> str:
         if start != -1:
             break
     if start == -1:
-        return text[:10000]
+        return text[:12000]
     end = -1
     for m in end_markers:
         pos = text.find(m, start)
@@ -30,7 +30,7 @@ def extract_annual_metrics_block(text: str) -> str:
             end = pos
             break
     if end == -1:
-        end = min(len(text), start + 8000)
+        end = min(len(text), start + 9000)
     return text[start:end]
 
 
@@ -57,39 +57,25 @@ def parse_metric_table(block: str) -> dict[str, str]:
     lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
     result: dict[str, str] = {}
 
-    # 1) locate the first annual header section and capture the unlabeled first row as revenue
-    first_2025 = next((i for i, s in enumerate(lines) if s == '2025 年'), -1)
-    if first_2025 != -1:
-        nums: list[str] = []
-        j = first_2025 + 1
-        while j < len(lines) and len(nums) < 4:
-            s = lines[j]
-            if is_numeric_token(s) or ('百分点' in s):
-                nums.append(s)
-            j += 1
-        revenue_nums = clean_num_tokens(nums)
-        if revenue_nums:
-            result['营业收入'] = revenue_nums[0]
+    first_num = next((s for s in lines if is_numeric_token(s) and '%' not in s and not re.fullmatch(r'20\d{2}', s)), '')
+    if first_num:
+        result['营业收入'] = first_num
 
-    # 2) parse labeled rows that appear as multi-line labels followed by numeric values
     current_label_parts: list[str] = []
     collecting = False
     i = 0
     while i < len(lines):
         s = lines[i]
-        if s in {'2025 年', '2024 年', '2023 年', '本年比上年增减', '2025 年末', '2024 年末', '2023 年末', '本年末比上年末增减'}:
-            i += 1
-            continue
         if s.startswith('七、'):
             break
-
+        if s in {'2025 年', '2024 年', '2023 年', '2022 年', '本年比上年增减', '2025 年末', '2024 年末', '2023 年末', '2022 年末', '本年末比上年末增减'}:
+            i += 1
+            continue
         if not is_numeric_token(s) and '百分点' not in s and not s.startswith('□'):
-            # start/continue a label block
             current_label_parts.append(s)
             collecting = True
             i += 1
             continue
-
         if collecting:
             label = ''.join(current_label_parts)
             num_tokens = []
@@ -106,9 +92,7 @@ def parse_metric_table(block: str) -> dict[str, str]:
             current_label_parts = []
             collecting = False
             continue
-
         i += 1
-
     return result
 
 
@@ -129,15 +113,18 @@ def extract_company_name(text: str, selected: dict) -> str:
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
     patterns = [
-        r'截至目前，公司主营业务为([^。]{10,200})。',
-        r'公司主营业务为([^。]{10,200})。',
-        r'目前主营业务为([^。]{10,200})。',
-        r'报告期内公司从事的主要业务([^。]{10,200})。',
+        r'截至目前，公司主营业务为([^。]{10,220})。',
+        r'公司主营业务为([^。]{10,220})。',
+        r'目前主营业务为([^。]{10,220})。',
+        r'公司产品覆盖([^。]{10,220})。',
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            return '主营业务为' + m.group(1)
+            body = m.group(1).strip('，,；;：:')
+            if '公司产品覆盖' in p:
+                return '产品覆盖' + body
+            return '主营业务为' + body
     return ''
 
 
@@ -145,42 +132,54 @@ def extract_generic_catalysts(text: str) -> list[str]:
     t = normalize_text(text)
     out = []
     patterns = [
-        (r'建成投产([^。]{6,80})。', '项目建成投产：{0}。'),
-        (r'稳步推进([^。]{6,80})。', '项目推进：{0}。'),
-        (r'成功收购([^。]{6,80})。', '并购进展：{0}。'),
-        (r'成功获取([^。]{6,80})。', '资质获取：{0}。'),
-        (r'实现资金收益超([0-9]+万元)', '资金使用效率改善：实现资金收益超 {0}。'),
-        (r'信用评级提升至“?([A-Z+]+)”?', '融资条件改善：公司信用评级提升至 {0}。'),
+        (r'全年实现国内央国企大型招投标项目中标规模稳居行业第([^；。]{1,8})', '国内央国企招投标中标规模位居行业第 {0}。'),
+        (r'行业出货量排名全球前([^；。]{1,8})', '组件出货量排名全球前 {0}。'),
+        (r'已形成([^。]{6,60}TOPCon电池产能)', '产能基础：已形成 {0}。'),
+        (r'海外市场出货同比大幅增长', '海外市场出货同比大幅增长。'),
+        (r'系统集成业务持续突破，([^。]{8,80})。', '系统集成业务推进：{0}。'),
+        (r'累计完成([0-9]+项降本技改项目)', '降本提效推进：累计完成 {0}。'),
+        (r'组件A品率提升至([0-9.]+%)', '产品良率提升：组件 A 品率提升至 {0}。'),
     ]
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
         if m:
-            val = ''.join(m.groups()).strip('，,；;：:')
-            if val:
+            if m.groups():
                 out.append(tpl.format(*m.groups()))
-    return out[:5]
+            else:
+                out.append(tpl)
+    dedup = []
+    for x in out:
+        if x not in dedup:
+            dedup.append(x)
+    return dedup[:6]
 
 
 def extract_generic_risks(text: str) -> list[str]:
     t = normalize_text(text)
     out = []
-    if '注意风险' in t or '重大风险' in t:
-        out.append('年报明确提示需关注经营中的重大风险，后续要结合具体项目和订单兑现继续跟踪。')
+    if '产能严重大于需求' in t or '供需失衡' in t:
+        out.append('行业供需失衡和价格波动仍在，盈利修复对价格环境与竞争格局比较敏感。')
     if '招投标' in t or '工程管理' in t:
-        out.append('项目执行链条较长，招投标、工程管理和内控执行都会影响经营质量。')
-    if '剥离' in t or '非主业' in t:
-        out.append('非主业资产或历史包袱处置仍需观察，节奏和结果会影响资金占用与报表表现。')
-    if '前瞻性陈述' in t or '未来发展规划' in t:
+        out.append('项目执行链条较长，招投标、工程管理和交付质量都会影响经营结果。')
+    if '未来发展规划' in t or '前瞻性陈述' in t:
         out.append('未来规划不等于业绩兑现，新增业务和项目推进仍有节奏与落地不确定性。')
-    return out[:4]
+    if '海外市场' in t or '全球' in t:
+        out.append('海外市场扩张带来机会，也意味着渠道、区域竞争和外部政策环境需要持续跟踪。')
+    return out[:5]
 
 
 def pick_metric(metrics: dict[str, str], *labels: str) -> str:
     for label in labels:
         for k, v in metrics.items():
-            if label in k:
+            if label in k and len(v) > 1:
                 return v
     return ''
+
+
+def fallback_metric_from_text(text: str, label: str) -> str:
+    t = normalize_text(text)
+    m = re.search(re.escape(label) + r'[^0-9-]{0,20}(-?[0-9][0-9,]*(?:\.[0-9]+)?)', t)
+    return m.group(1) if m else ''
 
 
 def main() -> None:
@@ -206,6 +205,8 @@ def main() -> None:
     revenue = pick_metric(metrics, '营业收入')
     profit = pick_metric(metrics, '归属于上市公司股东的净利润')
     ex_profit = pick_metric(metrics, '归属于上市公司股东的扣除非经常性损益的净利润')
+    if not ex_profit or ex_profit in {'8', '9'}:
+        ex_profit = fallback_metric_from_text(text, '归属于上市公司股东的扣除非经常性损益的净利润')
     cfo = pick_metric(metrics, '经营活动产生的现金流量净额')
     assets = pick_metric(metrics, '总资产')
     equity = pick_metric(metrics, '归属于上市公司股东的净资产')
