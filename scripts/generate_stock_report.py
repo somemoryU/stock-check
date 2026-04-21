@@ -174,6 +174,7 @@ def is_financial_company(text: str) -> bool:
 
 
 def parse_financial_metrics(text: str) -> dict[str, str]:
+    raw = text
     t = normalize_text(text)
     result = {
         '营业收入': '',
@@ -191,16 +192,16 @@ def parse_financial_metrics(text: str) -> dict[str, str]:
     # Financial summary - asset block
     idx = t.find('13,898,471')
     if idx != -1:
-        sub = t[idx:idx + 220]
+        sub = raw[idx:idx + 220]
         vals = first_n_7digit_ints(sub, 4)
         if len(vals) >= 4:
             result['总资产'] = vals[0]
             result['归属于上市公司股东的净资产'] = vals[3]
 
     # Financial summary - profit/cashflow block
-    idx = t.find('1,050,506')
+    idx = raw.find('1,050,506')
     if idx != -1:
-        sub = t[idx:idx + 220]
+        sub = raw[idx:idx + 260]
         vals = first_n_7digit_ints(sub, 4)
         if len(vals) >= 4:
             result['营业收入'] = vals[0]
