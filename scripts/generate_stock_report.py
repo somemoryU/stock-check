@@ -173,6 +173,111 @@ def is_financial_company(text: str) -> bool:
     return sum(1 for k in keys if k in t) >= 1
 
 
+def is_broker_company(text: str) -> bool:
+    t = normalize_text(text)
+    keys = [
+        '证券公司', '综合类券商', '财富管理业务', '证券经纪业务',
+        '投资银行', '方正承销保荐', '信用业务', '代销金融产品'
+    ]
+    return sum(1 for k in keys if k in t) >= 2
+
+
+def parse_broker_metrics(text: str) -> dict[str, str]:
+    t = text
+    result = {
+        '营业收入': '',
+        '归属于上市公司股东的净利润': '',
+        '归属于上市公司股东的扣除非经常性损益的净利润': '',
+        '经营活动产生的现金流量净额': '',
+        '总资产': '',
+        '归属于上市公司股东的净资产': '',
+    }
+
+    def first_decimal_after(label: str, window: int = 260) -> str:
+        idx = t.find(label)
+        if idx == -1:
+            return ''
+        sub = t[idx:idx + window]
+        vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
+        return vals[0] if vals else ''
+
+    # Prefer annual table raw values (单位：元)
+    result['营业收入'] = first_decimal_after('营业收入')
+    result['归属于上市公司股东的净利润'] = first_decimal_after('归属于上市公司股东的净利润')
+    result['经营活动产生的现金流量净额'] = first_decimal_after('经营活动产生的现金流量净额')
+    result['总资产'] = first_decimal_after('资产总额')
+    result['归属于上市公司股东的净资产'] = first_decimal_after('归属于上市公司股东的所有者权益')
+
+    # 扣非净利润在该报告里主表被断行污染，优先从“截至报告期末公司近2年的会计数据和财务指标”表取值
+    idx = t.find('归属于上市公司股东的扣除非经常性损益的净利润')
+    if idx != -1:
+        sub = t[idx:idx + 220]
+        vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
+        good = next((x for x in vals if len(x.replace(',', '').replace('.', '').replace('-', '')) >= 8), '')
+        if good:
+            result['归属于上市公司股东的扣除非经常性损益的净利润'] = good
+
+    # Fallback to management summary in 亿元 if needed
+    if not result['营业收入']:
+        m = re.search(r'实现营业收入\s*([0-9,]+(?:\.[0-9]+)?)\s*亿元', t)
+        if m:
+            result['营业收入'] = m.group(1)
+    if not result['归属于上市公司股东的净利润']:
+        m = re.search(r'归属于上市公司股东的净利润\s*([0-9,]+(?:\.[0-9]+)?)\s*亿元', t)
+        if m:
+            result['归属于上市公司股东的净利润'] = m.group(1)
+
+    return result
+
+
+def extract_broker_summary(text: str) -> str:
+    t = normalize_text(text)
+    m = re.search(r'锚定“([^”]{8,80}券商)”的战略目标', t)
+    if m:
+        return '以' + m.group(1) + '为目标，围绕财富管理、投资交易、资产管理和机构业务协同发展的综合类券商'
+    m = re.search(r'财富管理业务包括([^。]{10,120})。', t)
+    if m:
+        return '主营业务涵盖财富管理、投资交易、资产管理和投资银行等证券业务，其中财富管理业务包括' + m.group(1)
+    return ''
+
+
+def extract_broker_catalysts(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    pats = [
+        (r'实现营业收入\s*([0-9,]+(?:\.[0-9]+)?)亿元，同比增长\s*([0-9.]+%)', '实现营业收入{0}亿元，同比增长{1}。'),
+        (r'归属于上市公司股东的净利润\s*([0-9,]+(?:\.[0-9]+)?)亿元，同比增长\s*([0-9.]+%)', '归母净利润{0}亿元，同比增长{1}。'),
+        (r'客户资产首次迈上万亿平台|客户资产突破万亿元', '客户资产突破万亿元，财富管理业务继续扩容。'),
+        (r'两融规模突破\s*([0-9,]+(?:\.[0-9]+)?)亿元', '两融规模突破{0}亿元。'),
+        (r'金融产品保有规模突破\s*([0-9,]+(?:\.[0-9]+)?)亿元', '金融产品保有规模突破{0}亿元。'),
+        (r'承销公司债、企业债超\s*([0-9,]+(?:\.[0-9]+)?)亿元', '承销公司债、企业债超{0}亿元。'),
+        (r'公募基金管理规模年均复合增长率超\s*([0-9.]+%)', '公募基金管理规模年均复合增长率超{0}。'),
+    ]
+    for pat, tmpl in pats:
+        m = re.search(pat, t)
+        if m:
+            out.append(tmpl.format(*m.groups()))
+    seen=[]
+    for x in out:
+        if x not in seen:
+            seen.append(x)
+    return seen[:6]
+
+
+def extract_broker_risks(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    if '资本市场' in t or '市场波动' in t:
+        out.append('资本市场波动会影响经纪、两融、自营投资和资管业务表现。')
+    if '合规' in t or '风险管理' in t:
+        out.append('证券业务强监管持续，合规管理、风控指标和业务边界需要持续满足监管要求。')
+    if '客户资产' in t or '财富管理' in t:
+        out.append('财富管理业务增长依赖客户资产扩张、产品销售能力和服务转化效率。')
+    if '投资银行' in t or '股权融资' in t or '公司债' in t:
+        out.append('投行业务受发行节奏、项目储备和市场融资环境变化影响较大。')
+    return out[:4]
+
+
 def parse_financial_metrics(text: str) -> dict[str, str]:
     raw = text
     t = normalize_text(text)
@@ -289,6 +394,8 @@ def extract_company_name(text: str, selected: dict) -> str:
 
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
+    if is_broker_company(text):
+        return extract_broker_summary(text)
     if is_financial_company(text):
         return extract_financial_summary(text)
     patterns = [
@@ -426,12 +533,16 @@ def write_json(path: Path, obj: object) -> None:
 
 
 def extract_catalysts(text: str) -> list[str]:
+    if is_broker_company(text):
+        return extract_broker_catalysts(text)
     if is_financial_company(text):
         return extract_financial_catalysts(text)
     return extract_generic_catalysts(text)
 
 
 def extract_risks(text: str) -> list[str]:
+    if is_broker_company(text):
+        return extract_broker_risks(text)
     if is_financial_company(text):
         return extract_financial_risks(text)
     return extract_generic_risks(text)
@@ -456,7 +567,7 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
-    metrics = parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block)
+    metrics = parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block))
 
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
