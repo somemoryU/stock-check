@@ -193,39 +193,39 @@ def parse_broker_metrics(text: str) -> dict[str, str]:
         '归属于上市公司股东的净资产': '',
     }
 
-    def first_decimal_after(label: str, window: int = 260) -> str:
-        idx = t.find(label)
+    block_start = t.find('八、近三年主要会计数据和财务指标')
+    block = t[block_start:block_start + 2600] if block_start != -1 else t
+
+    def first_decimal_after(label: str, window: int = 260, source: str = '') -> str:
+        src = source or block
+        idx = src.find(label)
         if idx == -1:
             return ''
-        sub = t[idx:idx + window]
+        sub = src[idx:idx + window]
         vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
         return vals[0] if vals else ''
 
-    # Prefer annual table raw values (单位：元)
     result['营业收入'] = first_decimal_after('营业收入')
     result['归属于上市公司股东的净利润'] = first_decimal_after('归属于上市公司股东的净利润')
     result['经营活动产生的现金流量净额'] = first_decimal_after('经营活动产生的现金流量净额')
     result['总资产'] = first_decimal_after('资产总额')
     result['归属于上市公司股东的净资产'] = first_decimal_after('归属于上市公司股东的所有者权益')
 
-    # 扣非净利润在该报告里主表被断行污染，优先从“截至报告期末公司近2年的会计数据和财务指标”表取值
-    idx = t.find('归属于上市公司股东的扣除非经常性损益的净利润')
+    idx = block.find('归属于上市公司股东的净利润')
     if idx != -1:
-        sub = t[idx:idx + 220]
+        sub = block[idx:idx + 320]
         vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
-        good = next((x for x in vals if len(x.replace(',', '').replace('.', '').replace('-', '')) >= 8), '')
-        if good:
-            result['归属于上市公司股东的扣除非经常性损益的净利润'] = good
+        if len(vals) >= 5:
+            result['归属于上市公司股东的扣除非经常性损益的净利润'] = vals[4]
 
-    # Fallback to management summary in 亿元 if needed
-    if not result['营业收入']:
-        m = re.search(r'实现营业收入\s*([0-9,]+(?:\.[0-9]+)?)\s*亿元', t)
-        if m:
-            result['营业收入'] = m.group(1)
-    if not result['归属于上市公司股东的净利润']:
-        m = re.search(r'归属于上市公司股东的净利润\s*([0-9,]+(?:\.[0-9]+)?)\s*亿元', t)
-        if m:
-            result['归属于上市公司股东的净利润'] = m.group(1)
+    if not result['归属于上市公司股东的扣除非经常性损益的净利润']:
+        idx = t.find('归属于上市公司股东的扣除非经常性损益的净利润')
+        if idx != -1:
+            sub = t[idx:idx + 220]
+            vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
+            good = next((x for x in vals if len(x.replace(',', '').replace('.', '').replace('-', '')) >= 8), '')
+            if good:
+                result['归属于上市公司股东的扣除非经常性损益的净利润'] = good
 
     return result
 
