@@ -160,6 +160,25 @@ def main() -> None:
                 "stderr": proc.stderr.strip(),
                 "saved": str(txt_out),
             })
+            if proc.returncode == 0:
+                report_proc = run_py(
+                    "generate_stock_report.py",
+                    args.code,
+                    args.code,
+                    "--txt",
+                    str(txt_out),
+                    "--meta",
+                    str(facts_dir / "f10_meta.json"),
+                    "--selected",
+                    str(facts_dir / "selected_announcements.json"),
+                    "--outdir",
+                    str(final_dir),
+                )
+                summary["steps"].append({
+                    "step": "generate_report",
+                    "ok": True,
+                    "stdout": report_proc.stdout.strip(),
+                })
     else:
         summary["steps"].append({"step": "fetch_pdf", "ok": False, "reason": f"no match for {args.report_name}"})
 
