@@ -73,6 +73,7 @@ def pdf_url_from_adjunct(adjunct_url: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run stock check pipeline")
     ap.add_argument("code", help="stock code, e.g. 000993")
+    ap.add_argument("--name", default="")
     ap.add_argument("--pages", type=int, default=5)
     ap.add_argument("--report-name", default="年度报告")
     ap.add_argument("--use-scrapling-fallback", action="store_true")
@@ -164,7 +165,7 @@ def main() -> None:
                 report_proc = run_py(
                     "generate_stock_report.py",
                     args.code,
-                    args.code,
+                    (args.name or args.code),
                     "--txt",
                     str(txt_out),
                     "--meta",
