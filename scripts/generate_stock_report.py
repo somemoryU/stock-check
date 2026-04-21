@@ -184,30 +184,29 @@ def parse_financial_metrics(text: str) -> dict[str, str]:
         '归属于上市公司股东的净资产': '',
     }
 
-    def split_fixed_groups(blob: str, groups: int) -> list[str]:
-        digits = blob.replace(',', '')
-        if len(digits) < groups * 7:
-            return []
-        take = digits[:groups * 7]
-        parts = [take[i:i+7] for i in range(0, groups * 7, 7)]
-        return [f'{int(x):,}' for x in parts]
+    def first_n_7digit_ints(sub: str, n: int) -> list[str]:
+        vals = re.findall(r'\d{1,3}(?:,\d{3}){2}', sub)
+        return vals[:n]
 
-    # Prefer explicit glued-number blocks from the financial summary page.
-    m_assets = re.search(r'13,898,471[0-9,]{20,}1,000,419', t)
-    if m_assets:
-        parts = split_fixed_groups(m_assets.group(0), 4)
-        if len(parts) == 4:
-            result['总资产'] = parts[0]
-            result['归属于上市公司股东的净资产'] = parts[3]
+    # Financial summary - asset block
+    idx = t.find('13,898,471')
+    if idx != -1:
+        sub = t[idx:idx + 220]
+        vals = first_n_7digit_ints(sub, 4)
+        if len(vals) >= 4:
+            result['总资产'] = vals[0]
+            result['归属于上市公司股东的净资产'] = vals[3]
 
-    m_profit = re.search(r'1,050,506[0-9,]{20,}658,632', t)
-    if m_profit:
-        parts = split_fixed_groups(m_profit.group(0), 4)
-        if len(parts) == 4:
-            result['营业收入'] = parts[0]
-            result['归属于上市公司股东的净利润'] = parts[1]
-            result['归属于上市公司股东的扣除非经常性损益的净利润'] = parts[2]
-            result['经营活动产生的现金流量净额'] = parts[3]
+    # Financial summary - profit/cashflow block
+    idx = t.find('1,050,506')
+    if idx != -1:
+        sub = t[idx:idx + 220]
+        vals = first_n_7digit_ints(sub, 4)
+        if len(vals) >= 4:
+            result['营业收入'] = vals[0]
+            result['归属于上市公司股东的净利润'] = vals[1]
+            result['归属于上市公司股东的扣除非经常性损益的净利润'] = vals[2]
+            result['经营活动产生的现金流量净额'] = vals[3]
 
     if all(result.values()):
         return result
@@ -219,11 +218,11 @@ def parse_financial_metrics(text: str) -> dict[str, str]:
     ]
     for k, pat in pats:
         m = re.search(pat, t)
-        if m:
+        if m and not result[k]:
             result[k] = str(int(round(float(m.group(1).replace(',', '')) * 100)))
 
     m = re.search(r'集团2025年经审计[^。]{0,120}归属于母公司股东的净利润为人民币([0-9,]+(?:\.[0-9]+)?)亿元', t)
-    if m:
+    if m and not result['归属于上市公司股东的净利润']:
         result['归属于上市公司股东的净利润'] = str(int(round(float(m.group(1).replace(',', '')) * 100)))
 
     return result
