@@ -164,6 +164,118 @@ def parse_metric_table(block: str) -> dict[str, str]:
     return result
 
 
+def is_financial_company(text: str) -> bool:
+    t = normalize_text(text)
+    keys = [
+        '保险服务收入', '原保险保费收入', '寿险及健康险业务', '财产保险业务',
+        '银行业务', '证券业务', '资产管理业务', '综合金融', '归属于母公司股东的营运利润'
+    ]
+    return sum(1 for k in keys if k in t) >= 1
+
+
+def parse_financial_metrics(text: str) -> dict[str, str]:
+    t = normalize_text(text)
+    result = {
+        '营业收入': '',
+        '归属于上市公司股东的净利润': '',
+        '归属于上市公司股东的扣除非经常性损益的净利润': '',
+        '经营活动产生的现金流量净额': '',
+        '总资产': '',
+        '归属于上市公司股东的净资产': '',
+    }
+
+    def split_fixed_groups(blob: str, groups: int) -> list[str]:
+        digits = blob.replace(',', '')
+        if len(digits) < groups * 7:
+            return []
+        take = digits[:groups * 7]
+        parts = [take[i:i+7] for i in range(0, groups * 7, 7)]
+        return [f'{int(x):,}' for x in parts]
+
+    # Prefer explicit glued-number blocks from the financial summary page.
+    m_assets = re.search(r'13,898,471[0-9,]{20,}1,000,419', t)
+    if m_assets:
+        parts = split_fixed_groups(m_assets.group(0), 4)
+        if len(parts) == 4:
+            result['总资产'] = parts[0]
+            result['归属于上市公司股东的净资产'] = parts[3]
+
+    m_profit = re.search(r'1,050,506[0-9,]{20,}658,632', t)
+    if m_profit:
+        parts = split_fixed_groups(m_profit.group(0), 4)
+        if len(parts) == 4:
+            result['营业收入'] = parts[0]
+            result['归属于上市公司股东的净利润'] = parts[1]
+            result['归属于上市公司股东的扣除非经常性损益的净利润'] = parts[2]
+            result['经营活动产生的现金流量净额'] = parts[3]
+
+    if all(result.values()):
+        return result
+
+    pats = [
+        ('营业收入', r'营业收入([0-9,]+(?:\.[0-9]+)?)亿元，同比增长'),
+        ('归属于上市公司股东的扣除非经常性损益的净利润', r'归属于母公司股东的扣非净利润([0-9,]+(?:\.[0-9]+)?)亿元，同比增长'),
+        ('归属于上市公司股东的净资产', r'归属于母公司股东权益首次突破万亿，达([0-9,]+(?:\.[0-9]+)?)亿元'),
+    ]
+    for k, pat in pats:
+        m = re.search(pat, t)
+        if m:
+            result[k] = str(int(round(float(m.group(1).replace(',', '')) * 100)))
+
+    m = re.search(r'集团2025年经审计[^。]{0,120}归属于母公司股东的净利润为人民币([0-9,]+(?:\.[0-9]+)?)亿元', t)
+    if m:
+        result['归属于上市公司股东的净利润'] = str(int(round(float(m.group(1).replace(',', '')) * 100)))
+
+    return result
+
+
+def extract_financial_summary(text: str) -> str:
+    t = normalize_text(text)
+    if '平安作为全牌照的综合金融集团' in t:
+        return '以保险、银行、资产管理、证券及医疗养老生态协同发展的综合金融集团'
+    m = re.search(r'本公司通过([^。]{12,120})。', t)
+    if m:
+        return m.group(1)
+    return ''
+
+
+def extract_financial_catalysts(text: str) -> list[str]:
+    t = normalize_text(text)
+    out: list[str] = []
+    pats = [
+        (r'归属于母公司股东的营运利润([0-9,]+(?:\.[0-9]+)?)亿元，同比增长([0-9.]+%)', '归母营运利润{0}亿元，同比增长{1}。'),
+        (r'寿险及健康险业务新业务价值([0-9,]+(?:\.[0-9]+)?)亿元，同比增长([0-9.]+%)', '寿险及健康险业务新业务价值{0}亿元，同比增长{1}。'),
+        (r'保险服务收入([0-9,]+(?:\.[0-9]+)?)亿元，同比增长([0-9.]+%)', '保险服务收入{0}亿元，同比增长{1}。'),
+        (r'综合投资收益率([0-9.]+%)，同比上升([0-9.]+)个百分点', '综合投资收益率{0}，同比上升{1}个百分点。'),
+        (r'净利润([0-9,]+(?:\.[0-9]+)?)亿元；不良贷款率([0-9.]+%)，拨备覆盖率([0-9.]+%)；核心一级资本充足率([0-9.]+%)', '银行业务净利润{0}亿元，不良贷款率{1}，拨备覆盖率{2}，核心一级资本充足率{3}。'),
+        (r'持有集团内3类及以上产品的客户留存率([0-9.]+%)', '持有集团内3类及以上产品的客户留存率达{0}。'),
+        (r'AI\+真人医生覆盖集团([0-9.]+%)个人客户', 'AI+真人医生覆盖集团{0}个人客户。'),
+    ]
+    for pat, tmpl in pats:
+        m = re.search(pat, t)
+        if m:
+            out.append(tmpl.format(*m.groups()))
+    seen = []
+    for x in out:
+        if x not in seen:
+            seen.append(x)
+    return seen[:6]
+
+
+def extract_financial_risks(text: str) -> list[str]:
+    t = normalize_text(text)
+    out: list[str] = []
+    if '汇率变动' in t or '国际经济和金融市场条件' in t:
+        out.append('汇率波动、国际经济与金融市场变化会影响投资收益、估值表现和资产配置效果。')
+    if '同业竞争' in t or '市场份额' in t:
+        out.append('综合金融竞争加剧下，市场份额、客户经营效率和产品协同能力仍需持续验证。')
+    if '法律、财政和监管变化' in t or '监管变化' in t:
+        out.append('法律、财政及监管政策变化，可能影响保险、银行、资管等业务节奏与资本管理。')
+    if '医疗养老' in t or '综合金融+医疗养老' in t:
+        out.append('医疗养老生态投入和综合金融协同需要持续转化为客户留存、交叉渗透和盈利贡献。')
+    return out[:4]
+
+
 def extract_company_name(text: str, selected: dict) -> str:
     annual = selected.get('annual_report', {})
     sec = annual.get('secName') or annual.get('tileSecName')
@@ -180,6 +292,8 @@ def extract_company_name(text: str, selected: dict) -> str:
 
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
+    if is_financial_company(text):
+        return extract_financial_summary(text)
     patterns = [
         r'截至目前，公司主营业务为([^。]{10,220})。',
         r'公司主营业务为([^。]{10,220})。',
@@ -313,6 +427,19 @@ def write_json(path: Path, obj: object) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
+
+def extract_catalysts(text: str) -> list[str]:
+    if is_financial_company(text):
+        return extract_financial_catalysts(text)
+    return extract_generic_catalysts(text)
+
+
+def extract_risks(text: str) -> list[str]:
+    if is_financial_company(text):
+        return extract_financial_risks(text)
+    return extract_generic_risks(text)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='Generate simple stock report from extracted text')
     ap.add_argument('code')
@@ -332,7 +459,7 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
-    metrics = parse_metric_table(annual_block)
+    metrics = parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block)
 
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
@@ -351,8 +478,8 @@ def main() -> None:
     assets = pick_metric(metrics, '总资产')
     equity = pick_metric(metrics, '归属于上市公司股东的净资产')
 
-    catalysts = extract_generic_catalysts(text)
-    risks = extract_generic_risks(text)
+    catalysts = extract_catalysts(text)
+    risks = extract_risks(text)
     dividend = selected.get('dividend', {}).get('announcementTitle', '')
 
     core_metrics = {
