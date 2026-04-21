@@ -185,24 +185,19 @@ def parse_financial_metrics(text: str) -> dict[str, str]:
         '归属于上市公司股东的净资产': '',
     }
 
-    def first_n_7digit_ints(sub: str, n: int) -> list[str]:
-        vals = re.findall(r'\d{1,3}(?:,\d{3}){2}', sub)
-        return vals[:n]
+    def find_7digit_ints(sub: str) -> list[str]:
+        return re.findall(r'\d{1,3}(?:,\d{3}){2}', sub)
 
-    # Financial summary - asset block
-    idx = t.find('13,898,471')
-    if idx != -1:
-        sub = raw[idx:idx + 220]
-        vals = first_n_7digit_ints(sub, 4)
+    idx_assets = raw.find('13,898,471')
+    if idx_assets != -1:
+        vals = find_7digit_ints(raw[idx_assets:idx_assets + 220])
         if len(vals) >= 4:
             result['总资产'] = vals[0]
             result['归属于上市公司股东的净资产'] = vals[3]
 
-    # Financial summary - profit/cashflow block
-    idx = raw.find('1,050,506')
-    if idx != -1:
-        sub = raw[idx:idx + 260]
-        vals = first_n_7digit_ints(sub, 4)
+    idx_profit = raw.find('1,050,506')
+    if idx_profit != -1:
+        vals = find_7digit_ints(raw[idx_profit:idx_profit + 120])
         if len(vals) >= 4:
             result['营业收入'] = vals[0]
             result['归属于上市公司股东的净利润'] = vals[1]
@@ -218,8 +213,10 @@ def parse_financial_metrics(text: str) -> dict[str, str]:
         ('归属于上市公司股东的净资产', r'归属于母公司股东权益首次突破万亿，达([0-9,]+(?:\.[0-9]+)?)亿元'),
     ]
     for k, pat in pats:
+        if result[k]:
+            continue
         m = re.search(pat, t)
-        if m and not result[k]:
+        if m:
             result[k] = str(int(round(float(m.group(1).replace(',', '')) * 100)))
 
     m = re.search(r'集团2025年经审计[^。]{0,120}归属于母公司股东的净利润为人民币([0-9,]+(?:\.[0-9]+)?)亿元', t)
