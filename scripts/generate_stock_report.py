@@ -7,8 +7,35 @@ from pathlib import Path
 
 
 def extract_number(text: str, label: str) -> str:
-    m = re.search(label + r"[：:]?\s*([0-9,]+(?:\.[0-9]+)?)", text)
-    return m.group(1) if m else ""
+    patterns = [
+        label + r"[：:]?\s*([0-9,]+(?:\.[0-9]+)?)",
+        label + r"[^0-9\n]{0,20}([0-9,]+(?:\.[0-9]+)?)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def extract_metric_from_summary(text: str, label: str) -> str:
+    windows = []
+    anchors = [
+        '主要会计数据和财务指标',
+        '主要财务指标',
+        '会计数据和财务指标',
+        '主要会计数据',
+    ]
+    for anchor in anchors:
+        idx = text.find(anchor)
+        if idx != -1:
+            windows.append(text[idx: idx + 5000])
+    windows.append(text[:8000])
+    for win in windows:
+        v = extract_number(win, label)
+        if v:
+            return v
+    return ""
 
 
 def extract_main_business(text: str) -> str:
@@ -52,12 +79,12 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding="utf-8"))
     text = txt_path.read_text(encoding="utf-8", errors="ignore")
 
-    revenue = extract_number(text, "营业收入")
-    profit = extract_number(text, "归属于上市公司股东的净利润")
-    ex_profit = extract_number(text, "归属于上市公司股东的扣除非经常性损益的净利润")
-    cfo = extract_number(text, "经营活动产生的现金流量净额")
-    assets = extract_number(text, "总资产")
-    equity = extract_number(text, "归属于上市公司股东的净资产")
+    revenue = extract_metric_from_summary(text, "营业收入")
+    profit = extract_metric_from_summary(text, "归属于上市公司股东的净利润")
+    ex_profit = extract_metric_from_summary(text, "归属于上市公司股东的扣除非经常性损益的净利润")
+    cfo = extract_metric_from_summary(text, "经营活动产生的现金流量净额")
+    assets = extract_metric_from_summary(text, "总资产")
+    equity = extract_metric_from_summary(text, "归属于上市公司股东的净资产")
     main_business = extract_main_business(text)
 
     catalysts = pick_lines(text, ["风电", "光伏", "储能", "海上风电", "虚拟电厂", "售电", "碳资产", "分布式"], 10)
