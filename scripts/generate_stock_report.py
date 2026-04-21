@@ -144,10 +144,7 @@ def extract_generic_catalysts(text: str) -> list[str]:
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
         if m:
-            if m.groups():
-                out.append(tpl.format(*m.groups()))
-            else:
-                out.append(tpl)
+            out.append(tpl.format(*m.groups()) if m.groups() else tpl)
     dedup = []
     for x in out:
         if x not in dedup:
@@ -207,6 +204,10 @@ def sum_quarterly_deducted_profit(text: str) -> str:
     return ''
 
 
+def write_json(path: Path, obj: object) -> None:
+    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='Generate simple stock report from extracted text')
     ap.add_argument('code')
@@ -218,6 +219,10 @@ def main() -> None:
     args = ap.parse_args()
 
     txt_path = Path(args.txt)
+    run_dir = txt_path.parent.parent
+    facts_dir = run_dir / 'facts'
+    facts_dir.mkdir(parents=True, exist_ok=True)
+
     meta = json.loads(Path(args.meta).read_text(encoding='utf-8'))
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
@@ -230,10 +235,13 @@ def main() -> None:
     revenue = pick_metric(metrics, '营业收入')
     profit = pick_metric(metrics, '归属于上市公司股东的净利润')
     ex_profit = pick_metric(metrics, '归属于上市公司股东的扣除非经常性损益的净利润')
+    ex_profit_source = 'annual_table'
     if not ex_profit or ex_profit in {'8', '9'}:
         ex_profit = fallback_metric_from_text(text, '归属于上市公司股东的扣除非经常性损益的净利润')
+        ex_profit_source = 'text_fallback'
     if not ex_profit or ex_profit in {'8', '9'}:
         ex_profit = sum_quarterly_deducted_profit(text)
+        ex_profit_source = 'quarterly_sum_fallback'
     cfo = pick_metric(metrics, '经营活动产生的现金流量净额')
     assets = pick_metric(metrics, '总资产')
     equity = pick_metric(metrics, '归属于上市公司股东的净资产')
@@ -241,6 +249,48 @@ def main() -> None:
     catalysts = extract_generic_catalysts(text)
     risks = extract_generic_risks(text)
     dividend = selected.get('dividend', {}).get('announcementTitle', '')
+
+    core_metrics = {
+        'company_name': company_name,
+        'code': args.code,
+        'annual_report_title': selected.get('annual_report', {}).get('announcementTitle', ''),
+        'metrics': {
+            '营业收入': revenue or '',
+            '归属于上市公司股东的净利润': profit or '',
+            '归属于上市公司股东的扣除非经常性损益的净利润': ex_profit or '',
+            '经营活动产生的现金流量净额': cfo or '',
+            '总资产': assets or '',
+            '归属于上市公司股东的净资产': equity or '',
+        },
+        'sources': {
+            '营业收入': 'annual_table',
+            '归属于上市公司股东的净利润': 'annual_table',
+            '归属于上市公司股东的扣除非经常性损益的净利润': ex_profit_source,
+            '经营活动产生的现金流量净额': 'annual_table',
+            '总资产': 'annual_table',
+            '归属于上市公司股东的净资产': 'annual_table',
+        }
+    }
+    business_summary = {
+        'company_name': company_name,
+        'code': args.code,
+        'summary': main_business or '',
+    }
+    catalysts_json = {
+        'company_name': company_name,
+        'code': args.code,
+        'items': catalysts,
+    }
+    risks_json = {
+        'company_name': company_name,
+        'code': args.code,
+        'items': risks,
+    }
+
+    write_json(facts_dir / 'core_metrics.json', core_metrics)
+    write_json(facts_dir / 'business_summary.json', business_summary)
+    write_json(facts_dir / 'catalysts.json', catalysts_json)
+    write_json(facts_dir / 'risks.json', risks_json)
 
     simple = f"""# {company_name}（{args.code}）体检报告（简版）
 
@@ -309,13 +359,23 @@ def main() -> None:
     if not risks:
         note += "- 待补充\n"
 
-    outdir = Path(args.outdir) if args.outdir else txt_path.parent.parent / 'final'
+    outdir = Path(args.outdir) if args.outdir else run_dir / 'final'
     outdir.mkdir(parents=True, exist_ok=True)
     simple_path = outdir / 'report_simple.md'
     note_path = outdir / 'report_investment_note.md'
     simple_path.write_text(simple, encoding='utf-8')
     note_path.write_text(note, encoding='utf-8')
-    print(json.dumps({'simple': str(simple_path), 'investment': str(note_path), 'company_name': company_name, 'metrics': metrics, 'ex_profit': ex_profit}, ensure_ascii=False))
+    print(json.dumps({
+        'simple': str(simple_path),
+        'investment': str(note_path),
+        'company_name': company_name,
+        'facts': {
+            'core_metrics': str(facts_dir / 'core_metrics.json'),
+            'business_summary': str(facts_dir / 'business_summary.json'),
+            'catalysts': str(facts_dir / 'catalysts.json'),
+            'risks': str(facts_dir / 'risks.json'),
+        }
+    }, ensure_ascii=False))
 
 
 if __name__ == '__main__':
