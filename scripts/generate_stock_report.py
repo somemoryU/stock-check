@@ -34,6 +34,14 @@ def extract_annual_metrics_block(text: str) -> str:
     return text[start:end]
 
 
+def normalize_text(text: str) -> str:
+    return re.sub(r'\s+', '', text)
+
+
+def is_numeric_token(s: str) -> bool:
+    return bool(re.fullmatch(r'-?[0-9][0-9,]*(?:\.[0-9]+)?%?', s))
+
+
 def clean_num_tokens(tokens: list[str]) -> list[str]:
     out = []
     for t in tokens:
@@ -45,18 +53,63 @@ def clean_num_tokens(tokens: list[str]) -> list[str]:
     return out
 
 
-def extract_metric_value(label: str, block: str) -> str:
-    idx = block.find(label)
-    if idx == -1:
-        return ""
-    tail = block[idx: idx + 500]
-    nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?%?', tail)
-    clean = clean_num_tokens(nums)
-    return clean[0] if clean else ""
+def parse_metric_table(block: str) -> dict[str, str]:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    result: dict[str, str] = {}
 
+    # 1) locate the first annual header section and capture the unlabeled first row as revenue
+    first_2025 = next((i for i, s in enumerate(lines) if s == '2025 年'), -1)
+    if first_2025 != -1:
+        nums: list[str] = []
+        j = first_2025 + 1
+        while j < len(lines) and len(nums) < 4:
+            s = lines[j]
+            if is_numeric_token(s) or ('百分点' in s):
+                nums.append(s)
+            j += 1
+        revenue_nums = clean_num_tokens(nums)
+        if revenue_nums:
+            result['营业收入'] = revenue_nums[0]
 
-def normalize_text(text: str) -> str:
-    return re.sub(r'\s+', '', text)
+    # 2) parse labeled rows that appear as multi-line labels followed by numeric values
+    current_label_parts: list[str] = []
+    collecting = False
+    i = 0
+    while i < len(lines):
+        s = lines[i]
+        if s in {'2025 年', '2024 年', '2023 年', '本年比上年增减', '2025 年末', '2024 年末', '2023 年末', '本年末比上年末增减'}:
+            i += 1
+            continue
+        if s.startswith('七、'):
+            break
+
+        if not is_numeric_token(s) and '百分点' not in s and not s.startswith('□'):
+            # start/continue a label block
+            current_label_parts.append(s)
+            collecting = True
+            i += 1
+            continue
+
+        if collecting:
+            label = ''.join(current_label_parts)
+            num_tokens = []
+            while i < len(lines):
+                s2 = lines[i]
+                if is_numeric_token(s2) or ('百分点' in s2):
+                    num_tokens.append(s2)
+                    i += 1
+                    continue
+                break
+            clean = clean_num_tokens(num_tokens)
+            if clean:
+                result[label] = clean[0]
+            current_label_parts = []
+            collecting = False
+            continue
+
+        i += 1
+
+    return result
 
 
 def extract_company_name(text: str, selected: dict) -> str:
@@ -102,7 +155,9 @@ def extract_generic_catalysts(text: str) -> list[str]:
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
         if m:
-            out.append(tpl.format(*m.groups()))
+            val = ''.join(m.groups()).strip('，,；;：:')
+            if val:
+                out.append(tpl.format(*m.groups()))
     return out[:5]
 
 
@@ -120,6 +175,14 @@ def extract_generic_risks(text: str) -> list[str]:
     return out[:4]
 
 
+def pick_metric(metrics: dict[str, str], *labels: str) -> str:
+    for label in labels:
+        for k, v in metrics.items():
+            if label in k:
+                return v
+    return ''
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='Generate simple stock report from extracted text')
     ap.add_argument('code')
@@ -135,20 +198,17 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
+    metrics = parse_metric_table(annual_block)
 
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
 
-    revenue = extract_metric_value('营业收入', annual_block)
-    profit = extract_metric_value('归属于上市公司股东的净利润', annual_block)
-    ex_profit = extract_metric_value('归属于上市公司股东的扣除非经常性损益的净利润', annual_block)
-    if not ex_profit:
-        ex_profit = extract_metric_value('归属于上市公司股东的扣除非经常性损益的净\n利润', annual_block)
-    if not ex_profit:
-        ex_profit = extract_metric_value('归属于上市公司股东的扣除非经常性损益\n的净利润', annual_block)
-    cfo = extract_metric_value('经营活动产生的现金流量净额', annual_block)
-    assets = extract_metric_value('总资产', annual_block)
-    equity = extract_metric_value('归属于上市公司股东的净资产', annual_block)
+    revenue = pick_metric(metrics, '营业收入')
+    profit = pick_metric(metrics, '归属于上市公司股东的净利润')
+    ex_profit = pick_metric(metrics, '归属于上市公司股东的扣除非经常性损益的净利润')
+    cfo = pick_metric(metrics, '经营活动产生的现金流量净额')
+    assets = pick_metric(metrics, '总资产')
+    equity = pick_metric(metrics, '归属于上市公司股东的净资产')
 
     catalysts = extract_generic_catalysts(text)
     risks = extract_generic_risks(text)
@@ -227,7 +287,7 @@ def main() -> None:
     note_path = outdir / 'report_investment_note.md'
     simple_path.write_text(simple, encoding='utf-8')
     note_path.write_text(note, encoding='utf-8')
-    print(json.dumps({'simple': str(simple_path), 'investment': str(note_path), 'company_name': company_name}, ensure_ascii=False))
+    print(json.dumps({'simple': str(simple_path), 'investment': str(note_path), 'company_name': company_name, 'metrics': metrics}, ensure_ascii=False))
 
 
 if __name__ == '__main__':
