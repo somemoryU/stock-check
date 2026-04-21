@@ -34,17 +34,15 @@ def extract_annual_metrics_block(text: str) -> str:
     return text[start:end]
 
 
-def extract_first_number_after(label: str, block: str) -> str:
+def extract_2025_value(label: str, block: str) -> str:
     idx = block.find(label)
     if idx == -1:
         return ""
-    tail = block[idx: idx + 300]
+    tail = block[idx: idx + 400]
     nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?%?', tail)
-    for n in nums[1:]:
-        if '%' in n:
-            continue
-        return n
-    return ""
+    clean = [n for n in nums if '%' not in n]
+    # first numeric token after the label row is the 2025 value
+    return clean[0] if clean else ""
 
 
 def extract_main_business(text: str) -> str:
@@ -89,14 +87,14 @@ def main() -> None:
     text = txt_path.read_text(encoding="utf-8", errors="ignore")
     annual_block = extract_annual_metrics_block(text)
 
-    revenue = extract_first_number_after("营业收入", annual_block)
-    profit = extract_first_number_after("归属于上市公司股东的净利润", annual_block)
-    ex_profit = extract_first_number_after("归属于上市公司股东的扣除非经常性损益的净利润", annual_block)
+    revenue = extract_2025_value("营业收入", annual_block)
+    profit = extract_2025_value("归属于上市公司股东的净利润", annual_block)
+    ex_profit = extract_2025_value("归属于上市公司股东的扣除非经常性损益的净利润", annual_block)
     if not ex_profit:
-        ex_profit = extract_first_number_after("归属于上市公司股东的扣除非经常性损\n益的净利润", annual_block)
-    cfo = extract_first_number_after("经营活动产生的现金流量净额", annual_block)
-    assets = extract_first_number_after("总资产", annual_block)
-    equity = extract_first_number_after("归属于上市公司股东的净资产", annual_block)
+        ex_profit = extract_2025_value("归属于上市公司股东的扣除非经常性损\n益的净利润", annual_block)
+    cfo = extract_2025_value("经营活动产生的现金流量净额", annual_block)
+    assets = extract_2025_value("总资产", annual_block)
+    equity = extract_2025_value("归属于上市公司股东的净资产", annual_block)
     main_business = extract_main_business(text)
 
     catalysts = pick_lines(text, ["风电", "光伏", "储能", "海上风电", "虚拟电厂", "售电", "碳资产", "分布式"], 10)
