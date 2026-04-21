@@ -38,16 +38,44 @@ def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def first_announcement_match(pages: list[Path], keywords: list[str]) -> dict[str, Any] | None:
-    normalized = [k.lower() for k in keywords]
+def title_matches(title: str, keywords: list[str], exclude_keywords: list[str] | None = None) -> bool:
+    low = title.lower()
+    if exclude_keywords and any(k.lower() in low for k in exclude_keywords):
+        return False
+    return all(k.lower() in low for k in keywords)
+
+
+def first_announcement_match(
+    pages: list[Path],
+    keywords: list[str],
+    *,
+    exclude_keywords: list[str] | None = None,
+) -> dict[str, Any] | None:
     for page in pages:
         data = load_json(page)
-        for item in data.get("announcements", []):
+        for item in (data.get("announcements") or []):
             title = str(item.get("announcementTitle", ""))
-            low = title.lower()
-            if all(k in low for k in normalized):
+            if title_matches(title, keywords, exclude_keywords):
                 return item
     return None
+
+
+def best_annual_report(pages: list[Path], report_name: str) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for page in pages:
+        data = load_json(page)
+        for item in (data.get("announcements") or []):
+            title = str(item.get("announcementTitle", ""))
+            if title_matches(title, [report_name], ["半年度"]):
+                candidates.append(item)
+    if not candidates:
+        return None
+
+    # prefer full annual report over summary
+    full = [c for c in candidates if "摘要" not in str(c.get("announcementTitle", ""))]
+    if full:
+        return full[0]
+    return candidates[0]
 
 
 def choose_report_targets(pages: list[Path]) -> dict[str, dict[str, Any]]:
@@ -60,7 +88,10 @@ def choose_report_targets(pages: list[Path]) -> dict[str, dict[str, Any]]:
     }
     selected: dict[str, dict[str, Any]] = {}
     for key, kws in targets.items():
-        item = first_announcement_match(pages, kws)
+        if key == "annual_report":
+            item = best_annual_report(pages, kws[0])
+        else:
+            item = first_announcement_match(pages, kws)
         if item:
             selected[key] = item
     return selected
@@ -70,11 +101,31 @@ def pdf_url_from_adjunct(adjunct_url: str) -> str:
     return "https://static.cninfo.com.cn/" + adjunct_url.lstrip("/")
 
 
+def fetch_announcement_pages(code: str, meta: dict[str, str], raw_dir: Path, start_page: int, pages: int) -> list[str]:
+    proc = run_py(
+        "fetch_cninfo_announcements.py",
+        code,
+        meta["orgId"],
+        "--column",
+        meta["plate"],
+        "--plate",
+        meta["plate"],
+        "--pageNum",
+        str(start_page),
+        "--pages",
+        str(pages),
+        "--outdir",
+        str(raw_dir),
+    )
+    return proc.stdout.strip().splitlines()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run stock check pipeline")
     ap.add_argument("code", help="stock code, e.g. 000993")
     ap.add_argument("--name", default="")
     ap.add_argument("--pages", type=int, default=5)
+    ap.add_argument("--max-pages", type=int, default=12)
     ap.add_argument("--report-name", default="年度报告")
     ap.add_argument("--use-scrapling-fallback", action="store_true")
     ap.add_argument("--skip-pdftotext", action="store_true")
@@ -111,35 +162,44 @@ def main() -> None:
         raise SystemExit(f"failed to extract f10 meta from {f10_path}: {meta}")
     (facts_dir / "f10_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    proc = run_py(
-        "fetch_cninfo_announcements.py",
-        args.code,
-        meta["orgId"],
-        "--column",
-        meta["plate"],
-        "--plate",
-        meta["plate"],
-        "--pages",
-        str(args.pages),
-        "--outdir",
-        str(raw_dir),
-    )
-    summary["steps"].append({"step": "fetch_announcements", "ok": True, "stdout": proc.stdout.strip().splitlines()})
+    page_logs: list[str] = []
+    fetched_upto = 0
+    batch = max(1, args.pages)
+    annual = None
+    selected: dict[str, dict[str, Any]] = {}
 
-    page_files = [raw_dir / f"announcements_p{i}.json" for i in range(1, args.pages + 1) if (raw_dir / f"announcements_p{i}.json").exists()]
-    selected = choose_report_targets(page_files)
+    while fetched_upto < args.max_pages:
+        start_page = fetched_upto + 1
+        pages_to_fetch = min(batch, args.max_pages - fetched_upto)
+        page_logs.extend(fetch_announcement_pages(args.code, meta, raw_dir, start_page, pages_to_fetch))
+        fetched_upto += pages_to_fetch
+
+        page_files = [raw_dir / f"announcements_p{i}.json" for i in range(1, fetched_upto + 1) if (raw_dir / f"announcements_p{i}.json").exists()]
+        selected = choose_report_targets(page_files)
+        annual = best_annual_report(page_files, args.report_name)
+        if annual and annual.get("adjunctUrl"):
+            break
+
+        counts = []
+        for i in range(start_page, fetched_upto + 1):
+            p = raw_dir / f"announcements_p{i}.json"
+            if p.exists():
+                data = load_json(p)
+                counts.append(len(data.get("announcements") or []))
+        if counts and all(c == 0 for c in counts):
+            break
+
+    summary["steps"].append({
+        "step": "fetch_announcements",
+        "ok": True,
+        "stdout": page_logs,
+        "pagesFetched": fetched_upto,
+    })
+
     (facts_dir / "selected_announcements.json").write_text(json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    annual = None
-    for item in selected.values():
-        title = str(item.get("announcementTitle", ""))
-        if args.report_name in title and item.get("adjunctUrl"):
-            annual = item
-            break
     if annual is None:
-        item = first_announcement_match(page_files, [args.report_name])
-        if item and item.get("adjunctUrl"):
-            annual = item
+        annual = selected.get("annual_report")
 
     if annual:
         pdf_out = raw_dir / f"{args.code}_{args.report_name}.pdf"
@@ -181,7 +241,12 @@ def main() -> None:
                     "stdout": report_proc.stdout.strip(),
                 })
     else:
-        summary["steps"].append({"step": "fetch_pdf", "ok": False, "reason": f"no match for {args.report_name}"})
+        summary["steps"].append({
+            "step": "fetch_pdf",
+            "ok": False,
+            "reason": f"no match for {args.report_name}",
+            "pagesFetched": fetched_upto,
+        })
 
     out = run_dir / "run_summary.json"
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
