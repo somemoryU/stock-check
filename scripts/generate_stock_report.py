@@ -22,7 +22,7 @@ def extract_annual_metrics_block(text: str) -> str:
         if start != -1:
             break
     if start == -1:
-        return text[:8000]
+        return text[:10000]
     end = -1
     for m in end_markers:
         pos = text.find(m, start)
@@ -30,114 +30,131 @@ def extract_annual_metrics_block(text: str) -> str:
             end = pos
             break
     if end == -1:
-        end = min(len(text), start + 5000)
+        end = min(len(text), start + 8000)
     return text[start:end]
 
 
-def extract_2025_value(label: str, block: str) -> str:
+def clean_num_tokens(tokens: list[str]) -> list[str]:
+    out = []
+    for t in tokens:
+        if '%' in t:
+            continue
+        if re.fullmatch(r'20\d{2}', t):
+            continue
+        out.append(t)
+    return out
+
+
+def extract_metric_value(label: str, block: str) -> str:
     idx = block.find(label)
     if idx == -1:
         return ""
-    tail = block[idx: idx + 400]
+    tail = block[idx: idx + 500]
     nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?%?', tail)
-    clean = [n for n in nums if '%' not in n]
+    clean = clean_num_tokens(nums)
     return clean[0] if clean else ""
 
 
-def normalize_spaces(s: str) -> str:
-    s = s.replace('\n', '')
-    s = re.sub(r'\s+', ' ', s)
-    return s.strip()
+def normalize_text(text: str) -> str:
+    return re.sub(r'\s+', '', text)
 
 
-def extract_main_business(text: str) -> str:
-    m = re.search(r'公司致力于清洁能源、新能源等领域的发展。?目前主营业务为([^。]{10,120})。', text.replace('\n', ''))
+def extract_company_name(text: str, selected: dict) -> str:
+    annual = selected.get('annual_report', {})
+    sec = annual.get('secName') or annual.get('tileSecName')
+    if sec:
+        return str(sec)
+    m = re.search(r'股票简称\s*([\u4e00-\u9fffA-Za-z0-9]+)', text)
     if m:
-        return '主营业务为' + m.group(1).strip()
-    m = re.search(r'主营业务为([^。；\n]{10,120})', text.replace('\n', ''))
+        return m.group(1)
+    m = re.search(r'公司的中文简称\s*([\u4e00-\u9fffA-Za-z0-9]+)', text)
     if m:
-        return '主营业务为' + m.group(1).strip(' ，,。；;')
+        return m.group(1)
     return ''
 
 
-def extract_generation_summary(text: str) -> list[str]:
-    t = text.replace('\n', '')
+def extract_main_business(text: str) -> str:
+    t = normalize_text(text)
+    patterns = [
+        r'截至目前，公司主营业务为([^。]{10,200})。',
+        r'公司主营业务为([^。]{10,200})。',
+        r'目前主营业务为([^。]{10,200})。',
+        r'报告期内公司从事的主要业务([^。]{10,200})。',
+    ]
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            return '主营业务为' + m.group(1)
+    return ''
+
+
+def extract_generic_catalysts(text: str) -> list[str]:
+    t = normalize_text(text)
     out = []
     patterns = [
-        (r'完成水力发电量([0-9.,]+) 万千瓦时，较上年同期([^；。]{1,40})', '水电发电量 {0} 万千瓦时，{1}。'),
-        (r'完成风力发电量([0-9.,]+) 万千瓦时，较上年同期([^；。]{1,40})', '风电发电量 {0} 万千瓦时，{1}。'),
-        (r'完成光伏发电量([0-9.,]+) 万千瓦时，较去年同期([^；。]{1,40})', '光伏发电量 {0} 万千瓦时，{1}。'),
+        (r'建成投产([^。]{6,80})。', '项目建成投产：{0}。'),
+        (r'稳步推进([^。]{6,80})。', '项目推进：{0}。'),
+        (r'成功收购([^。]{6,80})。', '并购进展：{0}。'),
+        (r'成功获取([^。]{6,80})。', '资质获取：{0}。'),
+        (r'实现资金收益超([0-9]+万元)', '资金使用效率改善：实现资金收益超 {0}。'),
+        (r'信用评级提升至“?([A-Z+]+)”?', '融资条件改善：公司信用评级提升至 {0}。'),
     ]
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
         if m:
-            out.append(tpl.format(m.group(1), m.group(2)))
-    return out
-
-
-def extract_catalysts(text: str) -> list[str]:
-    t = text.replace('\n', '')
-    out = []
-    m = re.search(r'陆续建成投产\s*([0-9]+) 个屋顶分布式光伏发电项目，新增装机容量\s*([0-9.]+) 兆瓦', t)
-    if m:
-        out.append(f'分布式光伏已落地：建成投产 {m.group(1)} 个屋顶项目，新增装机 {m.group(2)} 兆瓦。')
-    if '海上风电项目稳步推进' in t:
-        out.append('海上风电在推进：参与宁德深水 B-1 区项目，并协同推进霞浦海上风电场 B 区、宁德深水 A 区项目。')
-    m = re.search(r'成功收购福建寿宁牛头山水电有限公司 10%股权，新增水电权益装机容量\s*([0-9.]+) 兆瓦', t)
-    if m:
-        out.append(f'水电权益装机有增量：并购带来新增权益装机 {m.group(1)} 兆瓦。')
-    if '成功获取售电资质' in t:
-        out.append('新业务在铺开：已取得售电资质，开始同步推进市场拓展与客户开发。')
-    out.extend(extract_generation_summary(text))
-    return out[:6]
-
-
-def extract_risks(text: str) -> list[str]:
-    t = text.replace('\n', '')
-    out = []
-    if '降雨量较上年同期减少所致' in t:
-        out.append('水电波动受来水影响明显，降雨变化会直接影响发电量和售电量。')
-    if '风电场风速同比增加' in t:
-        out.append('风电表现与风资源相关，风况波动会影响年度产出。')
-    if '强化风险排查' in t or '风险管理' in t:
-        out.append('项目建设、招投标和内控执行仍需要持续压风险，管理要求不低。')
-    if '房地产业务剥离三年行动计划' in t:
-        out.append('非主业资产剥离仍在推进，历史包袱和处置节奏值得跟踪。')
-    if '前瞻性陈述' in t:
-        out.append('海风、售电等增量方向还在推进中，落地节奏和兑现力度存在不确定性。')
+            out.append(tpl.format(*m.groups()))
     return out[:5]
 
 
+def extract_generic_risks(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    if '注意风险' in t or '重大风险' in t:
+        out.append('年报明确提示需关注经营中的重大风险，后续要结合具体项目和订单兑现继续跟踪。')
+    if '招投标' in t or '工程管理' in t:
+        out.append('项目执行链条较长，招投标、工程管理和内控执行都会影响经营质量。')
+    if '剥离' in t or '非主业' in t:
+        out.append('非主业资产或历史包袱处置仍需观察，节奏和结果会影响资金占用与报表表现。')
+    if '前瞻性陈述' in t or '未来发展规划' in t:
+        out.append('未来规划不等于业绩兑现，新增业务和项目推进仍有节奏与落地不确定性。')
+    return out[:4]
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate simple stock report from extracted text")
-    ap.add_argument("code")
-    ap.add_argument("name")
-    ap.add_argument("--txt", required=True)
-    ap.add_argument("--meta", required=True)
-    ap.add_argument("--selected", required=True)
-    ap.add_argument("--outdir", default="")
+    ap = argparse.ArgumentParser(description='Generate simple stock report from extracted text')
+    ap.add_argument('code')
+    ap.add_argument('name')
+    ap.add_argument('--txt', required=True)
+    ap.add_argument('--meta', required=True)
+    ap.add_argument('--selected', required=True)
+    ap.add_argument('--outdir', default='')
     args = ap.parse_args()
 
     txt_path = Path(args.txt)
-    meta = json.loads(Path(args.meta).read_text(encoding="utf-8"))
-    selected = json.loads(Path(args.selected).read_text(encoding="utf-8"))
-    text = txt_path.read_text(encoding="utf-8", errors="ignore")
+    meta = json.loads(Path(args.meta).read_text(encoding='utf-8'))
+    selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
+    text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
 
-    revenue = extract_2025_value("营业收入", annual_block)
-    profit = extract_2025_value("归属于上市公司股东的净利润", annual_block)
-    ex_profit = extract_2025_value("归属于上市公司股东的扣除非经常性损益的净利润", annual_block)
-    if not ex_profit:
-        ex_profit = extract_2025_value("归属于上市公司股东的扣除非经常性损\n益的净利润", annual_block)
-    cfo = extract_2025_value("经营活动产生的现金流量净额", annual_block)
-    assets = extract_2025_value("总资产", annual_block)
-    equity = extract_2025_value("归属于上市公司股东的净资产", annual_block)
+    company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
-    catalysts = extract_catalysts(text)
-    risks = extract_risks(text)
-    dividend = selected.get("dividend", {}).get("announcementTitle", "")
 
-    simple = f"""# {args.name}（{args.code}）体检报告（简版）
+    revenue = extract_metric_value('营业收入', annual_block)
+    profit = extract_metric_value('归属于上市公司股东的净利润', annual_block)
+    ex_profit = extract_metric_value('归属于上市公司股东的扣除非经常性损益的净利润', annual_block)
+    if not ex_profit:
+        ex_profit = extract_metric_value('归属于上市公司股东的扣除非经常性损益的净\n利润', annual_block)
+    if not ex_profit:
+        ex_profit = extract_metric_value('归属于上市公司股东的扣除非经常性损益\n的净利润', annual_block)
+    cfo = extract_metric_value('经营活动产生的现金流量净额', annual_block)
+    assets = extract_metric_value('总资产', annual_block)
+    equity = extract_metric_value('归属于上市公司股东的净资产', annual_block)
+
+    catalysts = extract_generic_catalysts(text)
+    risks = extract_generic_risks(text)
+    dividend = selected.get('dividend', {}).get('announcementTitle', '')
+
+    simple = f"""# {company_name}（{args.code}）体检报告（简版）
 
 ## 公司画像
 - {main_business or '主业待补充'}
@@ -171,9 +188,9 @@ def main() -> None:
     if not risks:
         simple += "- 待补充\n"
 
-    simple += "\n## 一句话\n- 水电是底盘，风光是增量，海风和售电提供后续想象空间，但资源条件与项目兑现节奏都要盯。\n"
+    simple += "\n## 一句话\n- 这版先基于年报与公告做框架体检，后续可继续结合项目公告和经营数据补强判断。\n"
 
-    note = f"""# {args.name}（{args.code}）体检报告（投研笔记版）
+    note = f"""# {company_name}（{args.code}）体检报告（投研笔记版）
 
 ## 1. 证据底稿
 - 文本来源：`{txt_path}`
@@ -204,14 +221,14 @@ def main() -> None:
     if not risks:
         note += "- 待补充\n"
 
-    outdir = Path(args.outdir) if args.outdir else txt_path.parent.parent / "final"
+    outdir = Path(args.outdir) if args.outdir else txt_path.parent.parent / 'final'
     outdir.mkdir(parents=True, exist_ok=True)
-    simple_path = outdir / "report_simple.md"
-    note_path = outdir / "report_investment_note.md"
-    simple_path.write_text(simple, encoding="utf-8")
-    note_path.write_text(note, encoding="utf-8")
-    print(json.dumps({"simple": str(simple_path), "investment": str(note_path)}, ensure_ascii=False))
+    simple_path = outdir / 'report_simple.md'
+    note_path = outdir / 'report_investment_note.md'
+    simple_path.write_text(simple, encoding='utf-8')
+    note_path.write_text(note, encoding='utf-8')
+    print(json.dumps({'simple': str(simple_path), 'investment': str(note_path), 'company_name': company_name}, ensure_ascii=False))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
