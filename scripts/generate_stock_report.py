@@ -67,7 +67,7 @@ def parse_metric_table(block: str) -> dict[str, str]:
     i = 0
     while i < len(lines):
         s = lines[i]
-        if s.startswith('七、'):
+        if s.startswith('七、') or s.startswith('八、'):
             break
         if s in {'2025 年', '2024 年', '2023 年', '2022 年', '本年比上年增减', '2025 年末', '2024 年末', '2023 年末', '2022 年末', '本年末比上年末增减'}:
             i += 1
@@ -118,6 +118,9 @@ def extract_main_business(text: str) -> str:
         r'公司主营业务为([^。]{10,220})。',
         r'目前主营业务为([^。]{10,220})。',
         r'公司产品覆盖([^。]{10,220})。',
+        r'主要产品包括([^。]{10,220})。',
+        r'形成了以([^。]{10,220})的产品集群',
+        r'公司聚焦“([^”]{8,80})”的发展战略',
     ]
     for p in patterns:
         m = re.search(p, t)
@@ -125,6 +128,12 @@ def extract_main_business(text: str) -> str:
             body = m.group(1).strip('，,；;：:')
             if '公司产品覆盖' in p:
                 return '产品覆盖' + body
+            if '主要产品包括' in p:
+                return '主要产品包括' + body
+            if '形成了以' in p:
+                return '已形成以' + body + '的产品集群'
+            if '发展战略' in p:
+                return '公司聚焦' + body
             return '主营业务为' + body
     return ''
 
@@ -140,6 +149,12 @@ def extract_generic_catalysts(text: str) -> list[str]:
         (r'系统集成业务持续突破，([^。]{8,80})。', '系统集成业务推进：{0}。'),
         (r'累计完成([0-9]+项降本技改项目)', '降本提效推进：累计完成{0}。'),
         (r'组件A品率提升至([0-9.]+%)', '产品良率提升：组件A品率提升至{0}。'),
+        (r'核心产品稳步放量', '核心产品稳步放量，产品结构持续优化。'),
+        (r'研发费用同比增长近([0-9]+%)', '研发投入加大：研发费用同比增长近{0}。'),
+        (r'销售收入突破([0-9.]+亿元)', '核心品种销售收入突破{0}。'),
+        (r'销售量同比增长超过([0-9]+%)', '核心品种销售量同比增长超过{0}。'),
+        (r'成功国谈续约', '核心品种成功国谈续约。'),
+        (r'通过仿制药质量和疗效一致性评价', '部分核心化药已通过一致性评价。'),
     ]
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
@@ -161,9 +176,19 @@ def extract_generic_risks(text: str) -> list[str]:
         out.append('项目执行链条较长，招投标、工程管理和交付质量都会影响经营结果。')
     if '未来发展规划' in t or '前瞻性陈述' in t:
         out.append('未来规划不等于业绩兑现，新增业务和项目推进仍有节奏与落地不确定性。')
-    if '海外市场' in t or '全球' in t:
+    if ('海外市场' in t or '出口' in t or '国际化' in t) and '医药' not in t[:40000]:
         out.append('海外市场扩张带来机会，也意味着渠道、区域竞争和外部政策环境需要持续跟踪。')
-    return out[:5]
+    if '集采' in t or '医保控费' in t or '医保改革' in t:
+        out.append('集采、医保控费和行业合规整顿会持续影响产品价格、销售节奏和盈利空间。')
+    if '研发' in t and ('新药' in t or '一致性评价' in t):
+        out.append('研发推进、一致性评价和新品放量存在节奏不确定性，相关投入回收需要时间。')
+    if '同质化竞争' in t or '竞争' in t:
+        out.append('行业竞争加剧会压缩利润空间，核心品种销售放量和产品结构优化需要持续验证。')
+    dedup = []
+    for x in out:
+        if x not in dedup:
+            dedup.append(x)
+    return dedup[:5]
 
 
 def pick_metric(metrics: dict[str, str], *labels: str) -> str:
@@ -327,7 +352,6 @@ def main() -> None:
         simple += "- 待补充\n"
 
     simple += "\n## 一句话\n- 这版先基于年报与公告做框架体检，后续可继续结合项目公告和经营数据补强判断。\n"
-
     note = f"""# {company_name}（{args.code}）体检报告（投研笔记版）
 
 ## 1. 证据底稿
