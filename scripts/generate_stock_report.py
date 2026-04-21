@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 
@@ -132,13 +133,13 @@ def extract_generic_catalysts(text: str) -> list[str]:
     t = normalize_text(text)
     out = []
     patterns = [
-        (r'全年实现国内央国企大型招投标项目中标规模稳居行业第([^；。]{1,8})', '国内央国企招投标中标规模位居行业第 {0}。'),
-        (r'行业出货量排名全球前([^；。]{1,8})', '组件出货量排名全球前 {0}。'),
-        (r'已形成([^。]{6,60}TOPCon电池产能)', '产能基础：已形成 {0}。'),
+        (r'全年实现国内央国企大型招投标项目中标规模稳居行业第([一二三四五六七八九十0-9]+)', '国内央国企招投标中标规模位居行业第{0}。'),
+        (r'行业出货量排名全球前([一二三四五六七八九十0-9]+)', '组件出货量排名全球前{0}。'),
+        (r'已形成([^。]{6,60}TOPCon电池产能)', '产能基础：已形成{0}。'),
         (r'海外市场出货同比大幅增长', '海外市场出货同比大幅增长。'),
         (r'系统集成业务持续突破，([^。]{8,80})。', '系统集成业务推进：{0}。'),
-        (r'累计完成([0-9]+项降本技改项目)', '降本提效推进：累计完成 {0}。'),
-        (r'组件A品率提升至([0-9.]+%)', '产品良率提升：组件 A 品率提升至 {0}。'),
+        (r'累计完成([0-9]+项降本技改项目)', '降本提效推进：累计完成{0}。'),
+        (r'组件A品率提升至([0-9.]+%)', '产品良率提升：组件A品率提升至{0}。'),
     ]
     for pattern, tpl in patterns:
         m = re.search(pattern, t)
@@ -182,6 +183,30 @@ def fallback_metric_from_text(text: str, label: str) -> str:
     return m.group(1) if m else ''
 
 
+def sum_quarterly_deducted_profit(text: str) -> str:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        if '归属于上市公司股' in line and i + 2 < len(lines):
+            joined = ''.join(lines[i:i+3])
+            if '扣除非经常性' in joined and '净利润' in joined:
+                nums = []
+                j = i + 3
+                while j < len(lines) and len(nums) < 4:
+                    s = lines[j]
+                    if is_numeric_token(s) and '%' not in s:
+                        nums.append(s)
+                    elif nums and not is_numeric_token(s) and not re.fullmatch(r'[一二三四五六七八九十第季度年月末本上同比增减]+', s):
+                        break
+                    j += 1
+                if len(nums) == 4:
+                    try:
+                        total = sum(Decimal(x.replace(',', '')) for x in nums)
+                        return f'{total:,.2f}'
+                    except InvalidOperation:
+                        return ''
+    return ''
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description='Generate simple stock report from extracted text')
     ap.add_argument('code')
@@ -207,6 +232,8 @@ def main() -> None:
     ex_profit = pick_metric(metrics, '归属于上市公司股东的扣除非经常性损益的净利润')
     if not ex_profit or ex_profit in {'8', '9'}:
         ex_profit = fallback_metric_from_text(text, '归属于上市公司股东的扣除非经常性损益的净利润')
+    if not ex_profit or ex_profit in {'8', '9'}:
+        ex_profit = sum_quarterly_deducted_profit(text)
     cfo = pick_metric(metrics, '经营活动产生的现金流量净额')
     assets = pick_metric(metrics, '总资产')
     equity = pick_metric(metrics, '归属于上市公司股东的净资产')
@@ -288,7 +315,7 @@ def main() -> None:
     note_path = outdir / 'report_investment_note.md'
     simple_path.write_text(simple, encoding='utf-8')
     note_path.write_text(note, encoding='utf-8')
-    print(json.dumps({'simple': str(simple_path), 'investment': str(note_path), 'company_name': company_name, 'metrics': metrics}, ensure_ascii=False))
+    print(json.dumps({'simple': str(simple_path), 'investment': str(note_path), 'company_name': company_name, 'metrics': metrics, 'ex_profit': ex_profit}, ensure_ascii=False))
 
 
 if __name__ == '__main__':
