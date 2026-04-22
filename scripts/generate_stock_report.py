@@ -177,6 +177,103 @@ def is_financial_company(text: str) -> bool:
     return sum(1 for k in weak_keys if k in t) >= 2
 
 
+def is_bank_company(text: str) -> bool:
+    t = normalize_text(text)
+    keys = [
+        '商业银行', '本集团主要业务是向零售及批发客户提供存贷款业务、资金业务、资产管理及其他金融服务',
+        '归属于本行股东的净利润', '归属于本行普通股股东的净利润', '不良贷款率', '拨备覆盖率', '净利息收入', '净息差'
+    ]
+    return sum(1 for k in keys if k in t) >= 3
+
+
+def parse_bank_metrics(text: str) -> dict[str, str]:
+    raw = text
+    t = normalize_text(text)
+    result = {
+        '营业收入': '',
+        '归属于上市公司股东的净利润': '',
+        '归属于上市公司股东的扣除非经常性损益的净利润': '',
+        '经营活动产生的现金流量净额': '',
+        '总资产': '',
+        '归属于上市公司股东的净资产': '',
+    }
+
+    def first_decimal_after(label: str, window: int = 2600, source: str = raw) -> str:
+        idx = source.find(label)
+        if idx == -1:
+            return ''
+        sub = source[idx:idx + window]
+        vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', sub)
+        return vals[0] if vals else ''
+
+    block_start = raw.find('2.1 本集团主要会计数据和财务指标')
+    if block_start == -1:
+        block_start = raw.find('会计数据和财务指标摘要')
+    block = raw[block_start:block_start + 5000] if block_start != -1 else raw[:12000]
+
+    result['营业收入'] = first_decimal_after('营业收入', 180, block)
+    result['归属于上市公司股东的净利润'] = first_decimal_after('归属于本行股东的净利润', 220, block)
+    result['归属于上市公司股东的扣除非经常性损益的净利润'] = first_decimal_after('扣除非经常性损益后归属于本行股东的净利润', 260, block)
+    result['经营活动产生的现金流量净额'] = first_decimal_after('经营活动产生的现金流量净额', 220, block)
+    result['总资产'] = first_decimal_after('总资产', 220, block) or first_decimal_after('资产总额', 220, raw)
+    result['归属于上市公司股东的净资产'] = first_decimal_after('归属于本行股东权益', 220, block)
+
+    if not result['归属于上市公司股东的扣除非经常性损益的净利润']:
+        result['归属于上市公司股东的扣除非经常性损益的净利润'] = first_decimal_after('扣除非经常性损益后归属于本行普通股股东的净利润', 220, raw)
+
+    if not result['归属于上市公司股东的净资产']:
+        m = re.search(r'归属于本行股东权益\s*归属于本行普通股股东的每股净资产（人民币元）\(1\)\s*资本净额（高级法）[\s\S]{0,200}?2025年\s*12月31日\s*2024年\s*12月31日[\s\S]{0,200}?([0-9,]+(?:\.[0-9]+)?)', raw)
+        if m:
+            result['归属于上市公司股东的净资产'] = m.group(1)
+
+    return result
+
+
+def extract_bank_summary(text: str) -> str:
+    t = normalize_text(text)
+    if '本集团的主要业务是向零售及批发客户提供存贷款业务、资金业务、资产管理及其他金融服务' in t:
+        return '以零售金融、批发金融、资金业务、资产管理及其他金融服务协同发展的商业银行'
+    if '零售金融业务' in t and '批发金融业务' in t:
+        return '主营零售金融、批发金融、资金业务、财富管理及其他综合金融服务'
+    return ''
+
+
+def extract_bank_catalysts(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    pats = [
+        (r'报告期实现营业收入([0-9,]+(?:\.[0-9]+)?)亿元，归属于本行股东的净利润([0-9,]+(?:\.[0-9]+)?)亿元', '报告期实现营业收入{0}亿元、归属于本行股东的净利润{1}亿元。'),
+        (r'期末总资产突破([0-9.]+)万亿元', '期末总资产突破{0}万亿元。'),
+        (r'不良贷款率([0-9.]+%)，拨备覆盖率([0-9.]+%)', '不良贷款率{0}、拨备覆盖率{1}，资产质量保持稳健。'),
+        (r'核心一级资本充足率达([0-9.]+%)，总资本充足率([0-9.]+%)', '核心一级资本充足率{0}、总资本充足率{1}。'),
+        (r'管理零售客户总资产\(AUM\)突破([0-9.]+)万亿元', '管理零售客户总资产（AUM）突破{0}万亿元。'),
+        (r'公司客户融资总量\(FPA\)总规模达([0-9.]+)万亿元', '公司客户融资总量（FPA）总规模达{0}万亿元。'),
+    ]
+    for pat, tmpl in pats:
+        m = re.search(pat, t)
+        if m:
+            out.append(tmpl.format(*m.groups()))
+    seen=[]
+    for x in out:
+        if x not in seen:
+            seen.append(x)
+    return seen[:6]
+
+
+def extract_bank_risks(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    if '净息差' in t or '净利息收益率' in t or '低利率' in t:
+        out.append('低利率环境下净息差和净利息收益率承压，银行息差修复仍需观察。')
+    if '不良贷款率' in t or '拨备覆盖率' in t or '信用成本' in t:
+        out.append('资产质量、不良生成和拨备消耗变化，会直接影响盈利稳定性与风险抵补能力。')
+    if '房地产' in t or '零售信贷' in t:
+        out.append('房地产、零售信贷等重点领域风险若继续暴露，可能拖累资产质量与拨备水平。')
+    if '资本充足率' in t or '风险加权资产' in t:
+        out.append('资本充足率和风险加权资产约束，会影响信贷投放节奏、分红能力和扩表空间。')
+    return out[:4]
+
+
 def is_broker_company(text: str) -> bool:
     t = normalize_text(text)
     keys = [
@@ -442,6 +539,8 @@ def likely_policy_text(s: str) -> bool:
 
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
+    if is_bank_company(text):
+        return extract_bank_summary(text)
     if is_broker_company(text):
         return extract_broker_summary(text)
     if is_financial_company(text):
@@ -559,6 +658,8 @@ def extract_generic_risks(text: str) -> list[str]:
 
 
 def extract_catalysts(text: str) -> list[str]:
+    if is_bank_company(text):
+        return extract_bank_catalysts(text)
     if is_broker_company(text):
         return extract_broker_catalysts(text)
     if is_financial_company(text):
@@ -567,6 +668,8 @@ def extract_catalysts(text: str) -> list[str]:
 
 
 def extract_risks(text: str) -> list[str]:
+    if is_bank_company(text):
+        return extract_bank_risks(text)
     if is_broker_company(text):
         return extract_broker_risks(text)
     if is_financial_company(text):
@@ -655,7 +758,7 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
-    metrics = parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block))
+    metrics = parse_bank_metrics(text) if is_bank_company(text) else (parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block)))
 
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
