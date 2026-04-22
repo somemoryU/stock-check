@@ -50,14 +50,22 @@ def first_announcement_match(
     keywords: list[str],
     *,
     exclude_keywords: list[str] | None = None,
+    prefer_keywords: list[str] | None = None,
 ) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
     for page in pages:
         data = load_json(page)
         for item in (data.get("announcements") or []):
             title = str(item.get("announcementTitle", ""))
             if title_matches(title, keywords, exclude_keywords):
-                return item
-    return None
+                candidates.append(item)
+    if not candidates:
+        return None
+    if prefer_keywords:
+        preferred = [c for c in candidates if any(k in str(c.get("announcementTitle", "")) for k in prefer_keywords)]
+        if preferred:
+            return preferred[0]
+    return candidates[0]
 
 
 def best_annual_report(pages: list[Path], report_name: str) -> dict[str, Any] | None:
@@ -90,6 +98,10 @@ def choose_report_targets(pages: list[Path]) -> dict[str, dict[str, Any]]:
     for key, kws in targets.items():
         if key == "annual_report":
             item = best_annual_report(pages, kws[0])
+        elif key == "semiannual_report":
+            item = first_announcement_match(pages, kws, exclude_keywords=["摘要", "披露提示性公告"], prefer_keywords=["半年度报告全文", "半年度报告"])
+        elif key == "q3_report":
+            item = first_announcement_match(pages, kws, exclude_keywords=["摘要", "披露提示性公告"], prefer_keywords=["第三季度报告全文", "第三季度报告", "三季度报告全文", "三季度报告"])
         else:
             item = first_announcement_match(pages, kws)
         if item:

@@ -166,11 +166,15 @@ def parse_metric_table(block: str) -> dict[str, str]:
 
 def is_financial_company(text: str) -> bool:
     t = normalize_text(text)
-    keys = [
+    strong_keys = [
         '保险服务收入', '原保险保费收入', '寿险及健康险业务', '财产保险业务',
-        '银行业务', '证券业务', '资产管理业务', '综合金融', '归属于母公司股东的营运利润'
+        '归属于母公司股东的营运利润', '综合金融+医疗养老', '平安作为全牌照的综合金融集团'
     ]
-    return sum(1 for k in keys if k in t) >= 1
+    if any(k in t for k in strong_keys):
+        return True
+
+    weak_keys = ['银行业务', '证券业务', '资产管理业务', '综合金融']
+    return sum(1 for k in weak_keys if k in t) >= 2
 
 
 def is_broker_company(text: str) -> bool:
@@ -392,38 +396,87 @@ def extract_company_name(text: str, selected: dict) -> str:
     return ''
 
 
+def extract_section(text: str, start_markers: list[str], end_markers: list[str], window: int = 12000) -> str:
+    start = -1
+    for m in start_markers:
+        pos = text.find(m)
+        if pos != -1:
+            start = pos
+            break
+    if start == -1:
+        return ''
+    end = -1
+    for m in end_markers:
+        pos = text.find(m, start + 1)
+        if pos != -1:
+            end = pos
+            break
+    if end == -1:
+        end = min(len(text), start + window)
+    return text[start:end]
+
+
+def extract_main_business_section(text: str) -> str:
+    return extract_section(
+        text,
+        ['公司主要业务', '主营业务分析', '1、概述', '一、报告期内公司所处行业情况'],
+        ['主要财务数据同比变动情况', '占公司主营业务收入或主营业务利润10%以上的产品情况', '四、主营业务分析', '五、核心竞争力分析', '三、核心竞争力分析', '五、公司未来发展的展望', '六、重要事项'],
+        window=18000,
+    )
+
+
+def extract_risk_section(text: str) -> str:
+    section = extract_section(
+        text,
+        ['可能面对的风险', '公司可能面对的风险和应对措施', '重大风险提示'],
+        ['十二、报告期内接待调研、沟通、采访等活动登记表', '十一、公司未来发展的展望', '十、公司治理', '九、重要事项', '八、董事、监事、高级管理人员和员工情况'],
+        window=16000,
+    )
+    return section or text
+
+
+def likely_policy_text(s: str) -> bool:
+    bad = ['金融工具', '信用风险', '公允价值', '摊余成本计量', '资产负债表日', '初始确认', '会计政策']
+    return any(x in s for x in bad)
+
+
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
     if is_broker_company(text):
         return extract_broker_summary(text)
     if is_financial_company(text):
         return extract_financial_summary(text)
+
+    focus_text = normalize_text(extract_main_business_section(text) or text[:50000])
     patterns = [
-        r'截至目前，公司主营业务为([^。]{10,220})。',
+        r'公司主要从事([^。]{10,220})。',
         r'公司主营业务为([^。]{10,220})。',
         r'目前主营业务为([^。]{10,220})。',
-        r'公司的主要经营业务为([^。]{4,120})。',
-        r'公司产品覆盖([^。]{10,220})。',
+        r'公司的主要经营业务为([^。]{6,160})。',
+        r'公司主要业务包括([^。]{10,220})。',
         r'主要产品包括([^。]{10,220})。',
-        r'主要产品是([^。]{10,220})。',
+        r'产品主要应用于([^。]{10,220})。',
         r'形成了以([^。]{10,220})的产品集群',
         r'公司聚焦“([^”]{8,80})”的发展战略',
     ]
     for p in patterns:
-        m = re.search(p, t)
-        if m:
-            body = m.group(1).strip('，,；;：:')
-            if '公司产品覆盖' in p:
-                return '产品覆盖' + body
-            if '主要产品包括' in p:
-                return '主要产品包括' + body
-            if '主要产品是' in p:
-                return '主要经营业务为生产销售啤酒，主要产品包括' + body
-            if '形成了以' in p:
-                return '已形成以' + body + '的产品集群'
-            if '发展战略' in p:
-                return '公司聚焦' + body
-            return '主营业务为' + body
+        m = re.search(p, focus_text)
+        if not m:
+            continue
+        body = m.group(1).strip('，,；;：: ')
+        candidate = body
+        if '主要产品包括' in p:
+            candidate = '主要产品包括' + body
+        elif '产品主要应用于' in p:
+            candidate = '产品主要应用于' + body
+        elif '形成了以' in p:
+            candidate = '已形成以' + body + '的产品集群'
+        elif '发展战略' in p:
+            candidate = '公司聚焦' + body
+        else:
+            candidate = '主营业务为' + body
+        if not likely_policy_text(candidate):
+            return candidate
     return ''
 
 
@@ -464,7 +517,8 @@ def extract_generic_catalysts(text: str) -> list[str]:
 
 
 def extract_generic_risks(text: str) -> list[str]:
-    t = normalize_text(text)
+    risk_text = extract_risk_section(text)
+    t = normalize_text(risk_text)
     out = []
     if '产能严重大于需求' in t or '供需失衡' in t:
         out.append('行业供需失衡和价格波动仍在，盈利修复对价格环境与竞争格局比较敏感。')
@@ -494,6 +548,17 @@ def pick_metric(metrics: dict[str, str], *labels: str) -> str:
         for k, v in metrics.items():
             if label in k and len(v) > 1:
                 return v
+    return ''
+
+
+def fallback_metric_by_line(block: str, label: str) -> str:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        joined = ''.join(lines[i:i+3])
+        if label in joined:
+            for s in lines[i+1:i+10]:
+                if is_numeric_token(s) and '%' not in s and not re.fullmatch(r'20\d{2}', s):
+                    return s
     return ''
 
 
@@ -572,19 +637,19 @@ def main() -> None:
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
 
-    revenue = pick_metric(metrics, '营业收入')
-    profit = pick_metric(metrics, '归属于上市公司股东的净利润')
+    revenue = pick_metric(metrics, '营业收入') or fallback_metric_by_line(annual_block, '营业收入')
+    profit = pick_metric(metrics, '归属于上市公司股东的净利润') or fallback_metric_by_line(annual_block, '归属于上市公司股东的净利润')
     ex_profit = pick_metric(metrics, '归属于上市公司股东的扣除非经常性损益的净利润')
     ex_profit_source = 'annual_table'
     if not ex_profit or ex_profit in {'8', '9'}:
-        ex_profit = fallback_metric_from_text(text, '归属于上市公司股东的扣除非经常性损益的净利润')
+        ex_profit = fallback_metric_by_line(annual_block, '归属于上市公司股东的扣除非经常性损益的净利润') or fallback_metric_from_text(text, '归属于上市公司股东的扣除非经常性损益的净利润')
         ex_profit_source = 'text_fallback'
     if not ex_profit or ex_profit in {'8', '9'}:
         ex_profit = sum_quarterly_deducted_profit(text)
         ex_profit_source = 'quarterly_sum_fallback'
-    cfo = pick_metric(metrics, '经营活动产生的现金流量净额')
-    assets = pick_metric(metrics, '总资产')
-    equity = pick_metric(metrics, '归属于上市公司股东的净资产')
+    cfo = pick_metric(metrics, '经营活动产生的现金流量净额') or fallback_metric_by_line(annual_block, '经营活动产生的现金流量净额')
+    assets = pick_metric(metrics, '总资产') or fallback_metric_by_line(annual_block, '总资产')
+    equity = pick_metric(metrics, '归属于上市公司股东的净资产') or fallback_metric_by_line(annual_block, '归属于上市公司股东的净资产')
 
     catalysts = extract_catalysts(text)
     risks = extract_risks(text)
