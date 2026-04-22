@@ -185,6 +185,108 @@ def is_pharma_company(text: str) -> bool:
     return sum(1 for k in keys if k in t) >= 3
 
 
+def is_mining_company(text: str) -> bool:
+    t = normalize_text(text)
+    keys = [
+        '矿产铜', '矿产金', '矿产锌', '矿产银', '矿业集团', '资源勘查和开发', '金属矿产资源', '铜、金、锂、锌、银、钼', '冶炼加工', '锂（LCE）'
+    ]
+    return sum(1 for k in keys if k in t) >= 3
+
+
+def parse_mining_metrics(text: str) -> dict[str, str]:
+    raw = text
+    result = {
+        '营业收入': '',
+        '归属于上市公司股东的净利润': '',
+        '归属于上市公司股东的扣除非经常性损益的净利润': '',
+        '经营活动产生的现金流量净额': '',
+        '总资产': '',
+        '归属于上市公司股东的净资产': '',
+    }
+
+    block_start = raw.find('近三年主要会计数据')
+    if block_start == -1:
+        block_start = raw.find('主要会计数据')
+    block_end = raw.find('近三年主要财务指标', block_start) if block_start != -1 else -1
+    block = raw[block_start:block_end] if block_start != -1 and block_end != -1 else raw[:22000]
+
+    nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', block)
+    anchor = -1
+    for i, x in enumerate(nums):
+        if x == '349,079,082,852':
+            anchor = i
+            break
+    if anchor != -1 and len(nums) >= anchor + 31:
+        # 紫金这类矿业主表压平成：营收/利润总额/同比/上期/净利润/归母/扣非/现金流/净资产/总资产
+        result['营业收入'] = nums[anchor]
+        result['归属于上市公司股东的净利润'] = nums[anchor + 9]
+        result['归属于上市公司股东的扣除非经常性损益的净利润'] = nums[anchor + 16]
+        result['经营活动产生的现金流量净额'] = nums[anchor + 20]
+        result['归属于上市公司股东的净资产'] = nums[anchor + 27]
+        result['总资产'] = nums[anchor + 31]
+        return result
+
+    def first_after(label: str, window: int = 260) -> str:
+        idx = block.find(label)
+        if idx == -1:
+            return ''
+        sub = block[idx:idx + window]
+        vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', sub)
+        vals = [x for x in vals if x not in {'2025', '2024', '2023'}]
+        return vals[0] if vals else ''
+
+    result['营业收入'] = first_after('营业收入')
+    result['归属于上市公司股东的净利润'] = first_after('归属于上市公司股东的净利润')
+    result['归属于上市公司股东的扣除非经常性损益的净利润'] = first_after('归属于上市公司股东的扣除非经常性损益的净利润')
+    result['经营活动产生的现金流量净额'] = first_after('经营活动产生的现金流量净额')
+    result['归属于上市公司股东的净资产'] = first_after('归属于上市公司股东的净资产')
+    result['总资产'] = first_after('总资产')
+    return result
+
+
+def extract_mining_summary(text: str) -> str:
+    t = normalize_text(text)
+    if '铜、金、锂、锌、银、钼等金属矿产资源勘查和开发为主' in t:
+        return '以铜、金、锂、锌、银、钼等金属矿产资源勘查开发及冶炼加工为核心的全球化矿业集团'
+    if '矿业集团' in t and '冶炼加工' in t:
+        return '主营金铜锂锌等金属资源开发与冶炼加工的跨国矿业集团'
+    return ''
+
+
+def extract_mining_catalysts(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    if '矿产铜 / 万吨' in t:
+        out.append('矿产铜 2025 年产量 109 万吨，规划到 2028 年提升至 150-160 万吨。')
+    if '矿产金 / 吨' in t:
+        out.append('矿产金 2025 年产量 90 吨，规划到 2028 年提升至 130-140 吨。')
+    if '公司规划至 2028 年形成 27-32 万吨当量碳酸锂产能' in t:
+        out.append('公司规划至 2028 年形成 27-32 万吨当量碳酸锂产能，锂板块成长空间大。')
+    if '巨龙铜矿二期改扩建工程建成投产' in t:
+        out.append('巨龙铜矿二期改扩建工程建成投产，铜板块扩产开始兑现。')
+    if '卡莫阿铜矿卡库拉矿段东区的排水及复产工作有序推进' in t:
+        out.append('卡莫阿铜矿卡库拉矿段东区排水及复产推进，海外核心铜资产恢复值得跟踪。')
+    if '金价大幅上涨' in t or '铜价高位运行' in t or '归母净利润（亿元）' in t:
+        out.append('金价上行、铜价高位叠加产量增长，推动利润释放弹性。')
+    dedup = []
+    for x in out:
+        if x not in dedup:
+            dedup.append(x)
+    return dedup[:6]
+
+
+def extract_mining_risks(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    out.append('金、铜、锂等主要金属价格波动，会直接影响矿山盈利和估值弹性。')
+    if '全球范围' in t or '跨国矿业集团' in t or '海外' in t:
+        out.append('海外项目较多，面临地缘政治、税收政策、社区关系和跨境经营风险。')
+    if '改扩建工程' in t or '复产' in t or '投产' in t:
+        out.append('重点矿山扩建、复产和新项目投产节奏若不及预期，会影响产量兑现。')
+    out.append('安全环保、品位变化及成本上升，可能削弱资源品高景气下的盈利释放。')
+    return out[:4]
+
+
 def parse_pharma_metrics(text: str) -> dict[str, str]:
     raw = text
     result = {
@@ -685,6 +787,8 @@ def likely_policy_text(s: str) -> bool:
 
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
+    if is_mining_company(text):
+        return extract_mining_summary(text)
     if is_pharma_company(text):
         return extract_pharma_summary(text)
     if is_bank_company(text):
@@ -806,6 +910,8 @@ def extract_generic_risks(text: str) -> list[str]:
 
 
 def extract_catalysts(text: str) -> list[str]:
+    if is_mining_company(text):
+        return extract_mining_catalysts(text)
     if is_pharma_company(text):
         return extract_pharma_catalysts(text)
     if is_bank_company(text):
@@ -818,6 +924,8 @@ def extract_catalysts(text: str) -> list[str]:
 
 
 def extract_risks(text: str) -> list[str]:
+    if is_mining_company(text):
+        return extract_mining_risks(text)
     if is_pharma_company(text):
         return extract_pharma_risks(text)
     if is_bank_company(text):
@@ -910,7 +1018,7 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
-    metrics = parse_pharma_metrics(text) if is_pharma_company(text) else (parse_bank_metrics(text) if is_bank_company(text) else (parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block))))
+    metrics = parse_mining_metrics(text) if is_mining_company(text) else (parse_pharma_metrics(text) if is_pharma_company(text) else (parse_bank_metrics(text) if is_bank_company(text) else (parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block)))))
 
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
