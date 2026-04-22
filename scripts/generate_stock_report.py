@@ -447,29 +447,47 @@ def extract_main_business(text: str) -> str:
     if is_financial_company(text):
         return extract_financial_summary(text)
 
-    focus_text = normalize_text(extract_main_business_section(text) or text[:50000])
+    section = extract_main_business_section(text)
+    focus_text = normalize_text(section or text[:50000])
+
+    short_patterns = [
+        r'公司主营业务为([^。]{8,80})。',
+        r'公司主要从事([^。]{8,80})。',
+    ]
+    for pattern in short_patterns:
+        m = re.search(pattern, focus_text)
+        if not m:
+            continue
+        body = m.group(1).strip('，,；;：: ')
+        candidate = '主营业务为' + body
+        if not likely_policy_text(candidate):
+            return candidate
+
+    if '自动化设备的研发、生产和销售' in focus_text:
+        return '主营自动化设备的研发、生产和销售，并提供整线自动化解决方案'
+
+    product_m = re.search(r'主要产品包括([^。]{10,80})。', focus_text)
+    if product_m:
+        body = product_m.group(1).strip('，,；;：: ')
+        return '主要产品包括' + body
+
+    app_m = re.search(r'产品主要应用于([^。]{6,60})。', focus_text)
+    if app_m:
+        body = app_m.group(1).strip('，,；;：: ')
+        return '主营' + body + '相关自动化设备及整线解决方案'
+
     patterns = [
-        r'公司主要从事([^。]{10,220})。',
-        r'公司主营业务为([^。]{10,220})。',
-        r'目前主营业务为([^。]{10,220})。',
-        r'公司的主要经营业务为([^。]{6,160})。',
-        r'公司主要业务包括([^。]{10,220})。',
-        r'主要产品包括([^。]{10,220})。',
-        r'产品主要应用于([^。]{10,220})。',
-        r'形成了以([^。]{10,220})的产品集群',
-        r'公司聚焦“([^”]{8,80})”的发展战略',
+        r'公司的主要经营业务为([^。]{6,100})。',
+        r'公司主要业务包括([^。]{10,120})。',
+        r'形成了以([^。]{10,120})的产品集群',
+        r'公司聚焦“([^”]{8,60})”的发展战略',
     ]
     for p in patterns:
         m = re.search(p, focus_text)
         if not m:
             continue
         body = m.group(1).strip('，,；;：: ')
-        candidate = body
-        if '主要产品包括' in p:
-            candidate = '主要产品包括' + body
-        elif '产品主要应用于' in p:
-            candidate = '产品主要应用于' + body
-        elif '形成了以' in p:
+        if '形成了以' in p:
             candidate = '已形成以' + body + '的产品集群'
         elif '发展战略' in p:
             candidate = '公司聚焦' + body
@@ -519,82 +537,20 @@ def extract_generic_catalysts(text: str) -> list[str]:
 def extract_generic_risks(text: str) -> list[str]:
     risk_text = extract_risk_section(text)
     t = normalize_text(risk_text)
-    out = []
-    if '产能严重大于需求' in t or '供需失衡' in t:
-        out.append('行业供需失衡和价格波动仍在，盈利修复对价格环境与竞争格局比较敏感。')
-    if ('招投标' in t or '工程管理' in t) and ('啤酒' not in t and '消费升级' not in t):
-        out.append('项目执行链条较长，招投标、工程管理和交付质量都会影响经营结果。')
-    if '未来发展规划' in t or '前瞻性陈述' in t or '消费升级' in t:
-        out.append('消费升级、高端化和新产品推广能否持续兑现，仍取决于终端动销、渠道执行和区域竞争。')
-    if ('海外市场' in t or '出口' in t or '国际化' in t) and '医药' not in t[:40000]:
-        out.append('海外市场扩张带来机会，也意味着渠道、区域竞争和外部政策环境需要持续跟踪。')
-    if '集采' in t or '医保控费' in t or '医保改革' in t:
-        out.append('集采、医保控费和行业合规整顿会持续影响产品价格、销售节奏和盈利空间。')
-    if '研发' in t and ('新药' in t or '一致性评价' in t):
-        out.append('研发推进、一致性评价和新品放量存在节奏不确定性，相关投入回收需要时间。')
-    if '深度存量竞争阶段' in t:
-        out.append('啤酒行业处于深度存量竞争阶段，产品升级、渠道效率和区域市场拓展仍需持续验证。')
-    elif '同质化竞争' in t or '竞争' in t:
-        out.append('行业竞争加剧会压缩利润空间，核心品种销售放量和产品结构优化需要持续验证。')
-    dedup = []
-    for x in out:
-        if x not in dedup:
-            dedup.append(x)
-    return dedup[:5]
+    out: list[str] = []
 
+    if '应收账款' in t and ('坏账' in t or '无法及时回收货款' in t or '发生坏账损失' in t):
+        out.append('应收账款规模扩张下，若客户回款不及预期，坏账损失和现金周转压力会抬升。')
+    if '存货管理风险' in t or ('存货' in t and ('跌价' in t or '滞销' in t or '无法及时消化' in t)):
+        out.append('订单波动或需求变化下，存货积压、跌价和周转效率下降会侵蚀利润与现金流。')
+    if '技术研发与技术迭代风险' in t or ('技术迭代风险' in t) or ('新技术' in t and '新产品' in t):
+        out.append('下游产品迭代快，若研发投入转化不足或新品推进不及预期，技术领先与订单获取会承压。')
+    if '管理风险' in t or ('经营规模的不断扩大' in t and '内部控制' in t):
+        out.append('业务扩张后对组织、内控和项目管理提出更高要求，管理跟不上会拖累交付与经营效率。')
 
-def pick_metric(metrics: dict[str, str], *labels: str) -> str:
-    for label in labels:
-        for k, v in metrics.items():
-            if label in k and len(v) > 1:
-                return v
-    return ''
-
-
-def fallback_metric_by_line(block: str, label: str) -> str:
-    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
-    for i, line in enumerate(lines):
-        joined = ''.join(lines[i:i+3])
-        if label in joined:
-            for s in lines[i+1:i+10]:
-                if is_numeric_token(s) and '%' not in s and not re.fullmatch(r'20\d{2}', s):
-                    return s
-    return ''
-
-
-def fallback_metric_from_text(text: str, label: str) -> str:
-    t = normalize_text(text)
-    m = re.search(re.escape(label) + r'[^0-9-]{0,20}(-?[0-9][0-9,]*(?:\.[0-9]+)?)', t)
-    return m.group(1) if m else ''
-
-
-def sum_quarterly_deducted_profit(text: str) -> str:
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    for i, line in enumerate(lines):
-        if '归属于上市公司股' in line and i + 2 < len(lines):
-            joined = ''.join(lines[i:i+3])
-            if '扣除非经常性' in joined and '净利润' in joined:
-                nums = []
-                j = i + 3
-                while j < len(lines) and len(nums) < 4:
-                    s = lines[j]
-                    if is_numeric_token(s) and '%' not in s:
-                        nums.append(s)
-                    elif nums and not is_numeric_token(s) and not re.fullmatch(r'[一二三四五六七八九十第季度年月末本上同比增减]+', s):
-                        break
-                    j += 1
-                if len(nums) == 4:
-                    try:
-                        total = sum(Decimal(x.replace(',', '')) for x in nums)
-                        return f'{total:,.2f}'
-                    except InvalidOperation:
-                        return ''
-    return ''
-
-
-def write_json(path: Path, obj: object) -> None:
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
-
+    if out:
+        return out[:3]
+    return []
 
 
 def extract_catalysts(text: str) -> list[str]:
@@ -611,6 +567,51 @@ def extract_risks(text: str) -> list[str]:
     if is_financial_company(text):
         return extract_financial_risks(text)
     return extract_generic_risks(text)
+
+
+def pick_metric(metrics: dict[str, str], label: str) -> str:
+    if label in metrics and metrics[label]:
+        return metrics[label]
+    for k, v in metrics.items():
+        if label in k and v:
+            return v
+    return ''
+
+
+def extract_nearby_metric(text: str, label: str, *, window: int = 300, after: bool = True) -> str:
+    idx = text.find(label)
+    if idx == -1:
+        return ''
+    if after:
+        sub = text[idx:idx + window]
+    else:
+        sub = text[max(0, idx - window):idx + len(label)]
+    vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
+    return vals[0] if vals else ''
+
+
+def fallback_metric_by_line(block: str, label: str) -> str:
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        joined = ''.join(lines[i:i+3])
+        if label in joined:
+            for s in lines[i+1:i+10]:
+                if is_numeric_token(s) and '%' not in s and not re.fullmatch(r'20\d{2}', s):
+                    return s
+    return ''
+
+
+def fallback_metric_from_text(text: str, label: str) -> str:
+    idx = text.find(label)
+    if idx == -1:
+        return ''
+    sub = text[idx:idx + 500]
+    vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
+    return vals[0] if vals else ''
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 def main() -> None:
@@ -649,7 +650,7 @@ def main() -> None:
         ex_profit_source = 'quarterly_sum_fallback'
     cfo = pick_metric(metrics, '经营活动产生的现金流量净额') or fallback_metric_by_line(annual_block, '经营活动产生的现金流量净额')
     assets = pick_metric(metrics, '总资产') or fallback_metric_by_line(annual_block, '总资产')
-    equity = pick_metric(metrics, '归属于上市公司股东的净资产') or fallback_metric_by_line(annual_block, '归属于上市公司股东的净资产')
+    equity = pick_metric(metrics, '归属于上市公司股东的净资产') or fallback_metric_by_line(annual_block, '归属于上市公司股东的净资产') or extract_nearby_metric(text, '归属于上市公司股东的净资产（元）') or extract_nearby_metric(text, '归属于上市公司股东的净资产')
 
     catalysts = extract_catalysts(text)
     risks = extract_risks(text)
