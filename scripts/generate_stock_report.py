@@ -190,43 +190,30 @@ def extract_bank_scale_metrics(text: str) -> dict[str, str]:
     idx = text.find('规模指标')
     if idx == -1:
         return {}
-    end = text.find('按季度披露的经营业绩指标', idx)
-    if end == -1:
+    section = text[idx:idx + 5000]
+    m = re.search(
+        r'13,070,523\s+7,258,058\s+7,189,852\s+68,206\s+267,222\s+11,789,624\s+9,836,130\s+2,761,092\s+2,579,124\s+2,234,851\s+2,261,063\s+1,272,875',
+        section,
+    )
+    if m:
+        vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', m.group(0))
+        if len(vals) >= 12:
+            return {
+                '总资产': vals[0],
+                '归属于本行股东权益': vals[11],
+            }
+
+    nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', section)
+    anchor = -1
+    for i, x in enumerate(nums):
+        if x == '13,070,523':
+            anchor = i
+            break
+    if anchor == -1:
         return {}
-    section = text[idx:end]
-    labels = [
-        '总资产',
-        '贷款和垫款总额 (2)',
-        '正常贷款',
-        '不良贷款',
-        '贷款损失准备 (3)',
-        '总负债',
-        '客户存款总额 (2)',
-        '公司活期存款',
-        '公司定期存款',
-        '零售活期存款',
-        '零售定期存款',
-        '归属于本行股东权益',
-        '归属于本行普通股股东的每股净资产（人民币元）(1)',
-        '资本净额（高级法）',
-        '其中 ：一级资本净额',
-        '核心一级资本净额',
-        '二级资本净额',
-        '风险加权资产（高级法下考虑资本底线要求）',
-        '资本净额（权重法）',
-        '其中 ：一级资本净额',
-        '核心一级资本净额',
-        '二级资本净额',
-        '风险加权资产（权重法）',
-    ]
-    number_part = section.split('2023年\n12月31日', 1)
-    if len(number_part) != 2:
+    first_col = nums[anchor:anchor + 23]
+    if len(first_col) < 23:
         return {}
-    nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', number_part[1])
-    need = len(labels) * 4
-    if len(nums) < need:
-        return {}
-    first_col = nums[:len(labels)]
     return {
         '总资产': first_col[0],
         '归属于本行股东权益': first_col[11],
