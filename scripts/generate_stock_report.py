@@ -177,6 +177,121 @@ def is_financial_company(text: str) -> bool:
     return sum(1 for k in weak_keys if k in t) >= 2
 
 
+def is_pharma_company(text: str) -> bool:
+    t = normalize_text(text)
+    keys = [
+        '创新药', '仿制药', '集采', '国家医保目录', 'NDA', 'IND', '临床试验', '适应症', '研发投入', '医药制造业'
+    ]
+    return sum(1 for k in keys if k in t) >= 3
+
+
+def parse_pharma_metrics(text: str) -> dict[str, str]:
+    raw = text
+    result = {
+        '营业收入': '',
+        '归属于上市公司股东的净利润': '',
+        '归属于上市公司股东的扣除非经常性损益的净利润': '',
+        '经营活动产生的现金流量净额': '',
+        '总资产': '',
+        '归属于上市公司股东的净资产': '',
+    }
+
+    block_start = raw.find('七、 近三年主要会计数据和财务指标')
+    if block_start == -1:
+        block_start = raw.find('近三年主要会计数据和财务指标')
+    block_end = raw.find('(二) 主要财务指标', block_start) if block_start != -1 else -1
+    block = raw[block_start:block_end] if block_start != -1 and block_end != -1 else raw[:9000]
+
+    labels = [
+        '营业收入',
+        '利润总额',
+        '归属于上市公司股东的净利润',
+        '归属于上市公司股东的扣除非经常性损益的净利润',
+        '经营活动产生的现金流量净额',
+        '归属于上市公司股东的净资产',
+        '总资产',
+    ]
+    nums = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', block)
+    # 过滤年份和百分比区数字，保留主表金额序列
+    nums = [x for x in nums if x not in {'2025', '2024', '2023'} and not re.fullmatch(r'[0-9]{1,2}\.[0-9]{2}', x)]
+    anchor = -1
+    for i, x in enumerate(nums):
+        if x == '31,629,416,193.83':
+            anchor = i
+            break
+    if anchor != -1 and len(nums) >= anchor + 17:
+        # 金额表按 2025/2024/增减/2023 交错展开
+        result['营业收入'] = nums[anchor]
+        result['归属于上市公司股东的净利润'] = nums[anchor + 4]
+        result['归属于上市公司股东的扣除非经常性损益的净利润'] = nums[anchor + 6]
+        result['经营活动产生的现金流量净额'] = nums[anchor + 8]
+        result['归属于上市公司股东的净资产'] = nums[anchor + 12]
+        result['总资产'] = nums[anchor + 14]
+        return result
+
+    def first_after(label: str, window: int = 220) -> str:
+        idx = block.find(label)
+        if idx == -1:
+            return ''
+        sub = block[idx:idx + window]
+        vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)?', sub)
+        vals = [x for x in vals if x not in {'2025', '2024', '2023'}]
+        return vals[0] if vals else ''
+
+    result['营业收入'] = first_after('营业收入')
+    result['归属于上市公司股东的净利润'] = first_after('归属于上市公司股东的\n净利润') or first_after('归属于上市公司股东的净利润')
+    result['归属于上市公司股东的扣除非经常性损益的净利润'] = first_after('归属于上市公司股东的\n扣除非经常性损益的净\n利润') or first_after('归属于上市公司股东的扣除非经常性损益的净利润')
+    result['经营活动产生的现金流量净额'] = first_after('经营活动产生的现金流\n量净额') or first_after('经营活动产生的现金流量净额')
+    result['归属于上市公司股东的净资产'] = first_after('归属于上市公司股东的\n净资产') or first_after('归属于上市公司股东的净资产')
+    result['总资产'] = first_after('总资产')
+    return result
+
+
+def extract_pharma_summary(text: str) -> str:
+    t = normalize_text(text)
+    if '创新药' in t and '仿制药' in t:
+        return '以创新药和高壁垒仿制药研发、生产、销售为核心的综合制药企业'
+    if '医药制造业' in t:
+        return '主营创新药、仿制药及相关医药产品研发、生产和销售'
+    return ''
+
+
+def extract_pharma_catalysts(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    pats = [
+        (r'创新药销售收入([0-9,]+(?:\.[0-9]+)?)亿元，同比增长([0-9.]+%)', '创新药销售收入{0}亿元，同比增长{1}。'),
+        (r'对外许可作为公司常态化业务，报告期内收入达([0-9,]+(?:\.[0-9]+)?)亿元', '对外许可收入达{0}亿元。'),
+        (r'累计研发投入([0-9,]+(?:\.[0-9]+)?)亿元，其中费用化研发投入([0-9,]+(?:\.[0-9]+)?)亿元', '累计研发投入{0}亿元，其中费用化研发投入{1}亿元。'),
+        (r'抗肿瘤产品收入([0-9,]+(?:\.[0-9]+)?)亿元，同比增长([0-9.]+%)', '抗肿瘤产品收入{0}亿元，同比增长{1}。'),
+        (r'非肿瘤产品收入([0-9,]+(?:\.[0-9]+)?)亿元，同比增长([0-9.]+%)', '非肿瘤产品收入{0}亿元，同比增长{1}。'),
+        (r'公司收到（1）MSD2亿美元、IDEAYA7500万美元以及MerckKGaA1500万欧元', '报告期内获取多笔海外对外许可首付款，BD出海贡献增量。'),
+    ]
+    for pat, tmpl in pats:
+        m = re.search(pat, t)
+        if m:
+            out.append(tmpl.format(*m.groups()))
+    seen=[]
+    for x in out:
+        if x not in seen:
+            seen.append(x)
+    return seen[:6]
+
+
+def extract_pharma_risks(text: str) -> list[str]:
+    t = normalize_text(text)
+    out = []
+    if '集采' in t or '国家医保目录' in t or '医保' in t:
+        out.append('集采、医保谈判和降价压力，可能压缩存量品种价格与利润空间。')
+    if '临床' in t or '适应症' in t or 'NDA' in t or 'IND' in t:
+        out.append('创新药研发存在临床推进、注册审评和适应症拓展不及预期的风险。')
+    if '对外许可' in t or '海外' in t or '国际医药创新体系' in t:
+        out.append('出海授权与海外商业化存在合作落地、里程碑兑现和国际监管不确定性。')
+    if '创新药' in t and '商业化' in t:
+        out.append('创新药上市后放量、进院和市场准入节奏若不及预期，会影响研发成果兑现。')
+    return out[:4]
+
+
 def is_bank_company(text: str) -> bool:
     t = normalize_text(text)
     keys = [
@@ -570,6 +685,8 @@ def likely_policy_text(s: str) -> bool:
 
 def extract_main_business(text: str) -> str:
     t = normalize_text(text)
+    if is_pharma_company(text):
+        return extract_pharma_summary(text)
     if is_bank_company(text):
         return extract_bank_summary(text)
     if is_broker_company(text):
@@ -689,6 +806,8 @@ def extract_generic_risks(text: str) -> list[str]:
 
 
 def extract_catalysts(text: str) -> list[str]:
+    if is_pharma_company(text):
+        return extract_pharma_catalysts(text)
     if is_bank_company(text):
         return extract_bank_catalysts(text)
     if is_broker_company(text):
@@ -699,6 +818,8 @@ def extract_catalysts(text: str) -> list[str]:
 
 
 def extract_risks(text: str) -> list[str]:
+    if is_pharma_company(text):
+        return extract_pharma_risks(text)
     if is_bank_company(text):
         return extract_bank_risks(text)
     if is_broker_company(text):
@@ -789,7 +910,7 @@ def main() -> None:
     selected = json.loads(Path(args.selected).read_text(encoding='utf-8'))
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
     annual_block = extract_annual_metrics_block(text)
-    metrics = parse_bank_metrics(text) if is_bank_company(text) else (parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block)))
+    metrics = parse_pharma_metrics(text) if is_pharma_company(text) else (parse_bank_metrics(text) if is_bank_company(text) else (parse_broker_metrics(text) if is_broker_company(text) else (parse_financial_metrics(text) if is_financial_company(text) else parse_metric_table(annual_block))))
 
     company_name = args.name if args.name and args.name != args.code else (extract_company_name(text, selected) or args.code)
     main_business = extract_main_business(text)
