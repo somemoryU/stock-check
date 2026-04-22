@@ -573,6 +573,23 @@ def extract_risks(text: str) -> list[str]:
         return extract_financial_risks(text)
     return extract_generic_risks(text)
 
+def sum_quarterly_deducted_profit(text: str) -> str:
+    marker = '归属于上市公司股东\n的扣除非经常性损益\n的净利润'
+    idx = text.find(marker)
+    if idx == -1:
+        marker = '归属于上市公司股东的扣除非经常性损益的净利润'
+        idx = text.find(marker)
+    if idx == -1:
+        return ''
+    sub = text[idx:idx + 800]
+    vals = re.findall(r'-?[0-9][0-9,]*(?:\.[0-9]+)', sub)
+    if len(vals) < 4:
+        return ''
+    try:
+        total = sum(Decimal(v.replace(',', '')) for v in vals[:4])
+    except Exception:
+        return ''
+    return f'{total:.2f}'
 
 def pick_metric(metrics: dict[str, str], label: str) -> str:
     if label in metrics and metrics[label]:
