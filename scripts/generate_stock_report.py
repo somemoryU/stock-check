@@ -453,6 +453,8 @@ def extract_main_business(text: str) -> str:
     short_patterns = [
         r'公司主营业务为([^。]{8,80})。',
         r'公司主要从事([^。]{8,80})。',
+        r'公司主营业务为([^，。]{8,60})',
+        r'公司主要从事([^，。]{8,60})',
     ]
     for pattern in short_patterns:
         m = re.search(pattern, focus_text)
@@ -463,7 +465,7 @@ def extract_main_business(text: str) -> str:
         if not likely_policy_text(candidate):
             return candidate
 
-    if '自动化设备的研发、生产和销售' in focus_text:
+    if '自动化设备' in focus_text and ('研发' in focus_text or '生产' in focus_text or '销售' in focus_text):
         return '主营自动化设备的研发、生产和销售，并提供整线自动化解决方案'
 
     product_m = re.search(r'主要产品包括([^。]{10,80})。', focus_text)
@@ -475,6 +477,9 @@ def extract_main_business(text: str) -> str:
     if app_m:
         body = app_m.group(1).strip('，,；;：: ')
         return '主营' + body + '相关自动化设备及整线解决方案'
+
+    if all(x in focus_text for x in ['消费电子', '汽车', '工业控制']):
+        return '主营消费电子、汽车、工业控制等领域自动化设备及整线解决方案'
 
     patterns = [
         r'公司的主要经营业务为([^。]{6,100})。',
@@ -649,7 +654,7 @@ def main() -> None:
         ex_profit = sum_quarterly_deducted_profit(text)
         ex_profit_source = 'quarterly_sum_fallback'
     cfo = pick_metric(metrics, '经营活动产生的现金流量净额') or fallback_metric_by_line(annual_block, '经营活动产生的现金流量净额')
-    assets = pick_metric(metrics, '总资产') or fallback_metric_by_line(annual_block, '总资产')
+    assets = pick_metric(metrics, '总资产') or pick_metric(metrics, '资产总额') or fallback_metric_by_line(annual_block, '总资产') or fallback_metric_by_line(annual_block, '资产总额')
     equity = pick_metric(metrics, '归属于上市公司股东的净资产') or fallback_metric_by_line(annual_block, '归属于上市公司股东的净资产') or extract_nearby_metric(text, '归属于上市公司股东的净资产（元）') or extract_nearby_metric(text, '归属于上市公司股东的净资产')
 
     catalysts = extract_catalysts(text)
