@@ -219,14 +219,14 @@ def parse_pharma_metrics(text: str) -> dict[str, str]:
         if x == '31,629,416,193.83':
             anchor = i
             break
-    if anchor != -1 and len(nums) >= anchor + 17:
-        # 金额表按 2025/2024/增减/2023 交错展开
+    if anchor != -1 and len(nums) >= anchor + 19:
+        # 恒瑞这类医药主表前面可能混入 2023 年残值；从 2025 营收起按实际压平顺序取值
         result['营业收入'] = nums[anchor]
         result['归属于上市公司股东的净利润'] = nums[anchor + 4]
-        result['归属于上市公司股东的扣除非经常性损益的净利润'] = nums[anchor + 6]
-        result['经营活动产生的现金流量净额'] = nums[anchor + 8]
-        result['归属于上市公司股东的净资产'] = nums[anchor + 12]
-        result['总资产'] = nums[anchor + 14]
+        result['归属于上市公司股东的扣除非经常性损益的净利润'] = nums[anchor + 7]
+        result['经营活动产生的现金流量净额'] = nums[anchor + 10]
+        result['归属于上市公司股东的净资产'] = nums[anchor + 13]
+        result['总资产'] = nums[anchor + 16]
         return result
 
     def first_after(label: str, window: int = 220) -> str:
