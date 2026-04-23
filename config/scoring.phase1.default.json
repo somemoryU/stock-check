@@ -1,0 +1,48 @@
+{
+  "engine": {
+    "enabled": true,
+    "baseline_score": 50
+  },
+  "risk_levels": {
+    "low_risk_min": 70,
+    "medium_risk_min": 40
+  },
+  "rules": [
+    {
+      "id": "rev_positive",
+      "metric": "营业收入",
+      "enabled": true,
+      "weight": 0,
+      "threshold": 0,
+      "direction": "higher_is_better",
+      "explanation_template": "{id}: 指标{metric}={value}，阈值{threshold}，方向{direction}。"
+    },
+    {
+      "id": "profit_positive",
+      "metric": "归属于上市公司股东的净利润",
+      "enabled": true,
+      "weight": 0,
+      "threshold": 0,
+      "direction": "higher_is_better",
+      "explanation_template": "{id}: 指标{metric}={value}，阈值{threshold}，方向{direction}。"
+    },
+    {
+      "id": "deducted_profit_positive",
+      "metric": "归属于上市公司股东的扣除非经常性损益的净利润",
+      "enabled": true,
+      "weight": 0,
+      "threshold": 0,
+      "direction": "higher_is_better",
+      "explanation_template": "{id}: 指标{metric}={value}，阈值{threshold}，方向{direction}。"
+    },
+    {
+      "id": "cfo_positive",
+      "metric": "经营活动产生的现金流量净额",
+      "enabled": true,
+      "weight": 0,
+      "threshold": 0,
+      "direction": "higher_is_better",
+      "explanation_template": "{id}: 指标{metric}={value}，阈值{threshold}，方向{direction}。"
+    }
+  ]
+}
