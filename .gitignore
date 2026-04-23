@@ -1,0 +1,37 @@
+# Local env
+.env
+.env.*
+!.env.example
+
+# Local overrides / secrets
+config/local.json
+config/*.local.json
+config/*secret*.json
+config/*private*.json
+
+# Runtime outputs
+runs/
+tmp/
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Safety (if repo root or context shifts)
+MEMORY.md
+memory/
+SOUL.md
+USER.md
+AGENTS.md
+TOOLS.md
+DREAMS.md
+skills/memory-distill/
+memory-distill.skill
